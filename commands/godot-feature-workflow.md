@@ -11,17 +11,22 @@ Orchestrate a test-first agent pipeline for non-trivial Godot 4 / GDScript featu
 The pipeline:
 
 ```
-Phase 1: godot-feature-planner  ─┐
-                                  ├─→ user review checkpoint
-Phase 2: (user reviews plan)    ─┘
-                                  ↓
-Phase 3: godot-feature-implementer ─┐
-         └─ delegates → godot-smoke-runner
-                                    ├─→ user verification checkpoint
-Phase 4: (user verifies)          ─┘
-                                    ↓
-Phase 5: Skill → atomic-docs (drift grep + atomic commit pass)
+Phase 1:   godot-feature-planner ──────────────┐
+           (verifies API claims via godot-docs) │
+Phase 1.7: [optional, on request] orchestrator  │  independent re-check of the
+           → Agent (Explore) re-verifies claims  │  planner's API claims
+                                                 ├─→ user review checkpoint
+Phase 2:   (user reviews plan)                 ─┘
+                                                 ↓
+Phase 3:   godot-feature-implementer (one code pass per dispatch) ─┐
+           orchestrator runs godot-smoke-runner, loops failures back │
+                                                                     ├─→ user verification checkpoint
+Phase 4:   (user verifies)                                         ─┘
+                                       ↓
+Phase 5:   Skill → atomic-docs (drift grep + atomic commit pass)
 ```
+
+The planner verifies its own API claims against the docs (via the `godot-docs` MCP tools) during planning, so doc verification is NOT a default orchestrator phase. Phase 1.7 is an optional, on-request independent re-check the orchestrator offers at the Phase 2 handoff — useful when a claim is load-bearing or surprising, skipped otherwise.
 
 ## Foundational principle
 
@@ -71,6 +76,7 @@ You MUST perform these steps in order before invoking any agent:
    - Smoke tests: <paths or "(pending)">
    - Current phase: <number — name>
    - Inquiry rounds: <count, default 0>
+   - Doc verification: <planner-verified | re-checked clean | re-checked, N fixed | re-planned | n/a>
    - Last checkpoint: <ISO date or "—">
    - Notes: <free-form, e.g. "user requested edge case X">
    ```
@@ -92,7 +98,7 @@ Agent({
 
 The planner returns one of two statuses: `questions-pending` (loop to Phase 1.5) or `plan-ready` (advance to Phase 2). When it returns `questions-pending`, you MUST surface the questions verbatim and route to Phase 1.5 — do not collapse, paraphrase, or guess at answers.
 
-You MUST NOT pre-empt the planner by reading Godot 4 API docs yourself; doc reads belong to its delegated `Agent (Explore)` sub-agents.
+The planner verifies its own Godot 4 API claims against the docs via the `godot-docs` MCP tools and records them in the plan's `API references consulted` section. You do NOT repeat that verification by default; Phase 1.7 offers an optional independent re-check on request. During Phase 1 itself you MUST NOT front-run the planner with your own design or doc dives — let it produce the plan first.
 
 When the planner returns, you MUST surface its handoff verbatim (plan path + test paths) and you MUST update the progress block with the new paths before proceeding.
 
@@ -121,6 +127,34 @@ When the planner's handoff begins with `Status: questions-pending`:
 
 You MUST NOT skip Phase 1.5 by guessing answers yourself. The whole point of pattern #2 is that the user decides, not you.
 
+## Phase 1.7 — Optional doc re-verification (OFFER when planner returns `plan-ready`)
+
+The planner has already verified its API claims against the docs and listed them in the plan's `API references consulted` section. This phase is an OPTIONAL independent re-check — a second opinion from a separate agent — not a mandatory gate. The default is to skip it and go straight to Phase 2 review.
+
+1. When you surface the plan-ready handoff, you MUST show the planner's `API references consulted` section so the user can see what was verified and against which doc pages.
+2. You MUST offer the optional re-check via `AskUserQuestion` — e.g. "The planner verified N API claims against the docs (listed above). Independent re-check before you review, or proceed to review?" Default / recommended is **proceed** unless a claim is load-bearing or looks surprising. If the user proceeds, advance to Phase 2 and record `Doc verification: planner-verified` — do NOT dispatch Explore.
+3. Only if the user opts in, you MUST dispatch one or more read-only `Agent (Explore)` sub-agents to re-verify the listed claims. Batch independent claims into parallel dispatches in a single message:
+
+   ```
+   Agent({
+     description: "Re-verify <plan slug> API claims",
+     subagent_type: "Explore",
+     prompt: "Independently re-verify these Godot 4 API / behavior claims against the official docs. The godot-docs MCP tools are deferred — first run ToolSearch(\"select:mcp__godot-docs__get_documentation_tree,mcp__godot-docs__get_documentation_file\") to load them, then use get_documentation_tree to locate the right page and get_documentation_file to read it. For each claim, report confirmed / contradicted / not-found WITH the doc reference (file path + section):\n1. <claim>\n2. <claim>\n...\nProject context lives in CLAUDE.md. Report conclusions only — do not dump doc excerpts."
+   })
+   ```
+
+   Dispatch discipline (keeps doc pages out of your context, returns trustworthy answers):
+   - Parallel by default — 2+ independent claims go in a single message, not serial roundtrips.
+   - Give each claim the exact doc path the planner already recorded (e.g. `classes/class_characterbody2d.md`); let the Explore agent fall back to `get_documentation_tree` when none is named.
+   - Demand conclusions, not excerpts — `confirmed / contradicted / not-found` plus a one-line doc reference. If an agent returns a doc dump, re-dispatch with a tighter cap rather than accepting it.
+   - If a finding points at a second class worth checking, dispatch a follow-up wave rather than reasoning from a half-answer.
+
+4. You MUST surface any re-check findings at the Phase 2 review, flagging any `contradicted` or `not-found` claim explicitly. A clean pass is reportable too ("re-check confirmed all N claims").
+5. If a re-check contradicts a claim, you MUST NOT silently patch the plan. Fold the correction back through the planner (re-dispatch with the doc finding embedded, marked `[doc]`) for a load-bearing claim; for a localized factual fix you MAY hand-edit the plan in place and note it at the checkpoint. Treat a contradicted load-bearing claim as a reason to re-plan, not to inline-fix.
+6. Update the progress block: set `Doc verification: <planner-verified | re-checked clean | re-checked, N fixed | re-planned | n/a>`.
+
+If the plan's `API references consulted` section reads "(none — no engine API surface)", record `Doc verification: n/a — no engine claims` and proceed; no offer is needed.
+
 ## Phase 2 — User review checkpoint (MUST wait)
 
 You MUST stop and wait for an explicit user signal. Do not start Phase 3 on momentum.
@@ -137,25 +171,53 @@ Ambiguous signals (e.g. user just asks a question about the plan) → answer the
 
 ## Phase 3 — Implementation (MUST when entry phase ≤ 3)
 
-You MUST dispatch the implementer via the `Agent` tool with the plan path:
+The implementer codes ONE pass per dispatch and does NOT run the engine. **You own the code → smoke → fix loop:** dispatch the implementer, run `godot-smoke-runner` on the params it returns, hand any failure back to the implementer, repeat until the smoke passes.
 
-```
-Agent({
-  description: "Implement <plan slug>",
-  subagent_type: "godot-feature-implementer",
-  prompt: "Implement using the plan at <plan path>."
-})
-```
+1. Dispatch the implementer with the plan path:
 
-You MUST NOT run the engine yourself; the implementer delegates smoke runs to `godot-smoke-runner`.
+   ```
+   Agent({
+     description: "Implement <plan slug>",
+     subagent_type: "godot-feature-implementer",
+     prompt: "Implement using the plan at <plan path>."
+   })
+   ```
 
-You MUST NOT edit project source files directly during this phase — let the implementer own the diff so it can iterate against the smoke harness.
+2. The implementer returns one of two statuses:
+   - `Status: smoke-ready` — it coded a pass; the handoff carries the smoke params (`smoke_scene`, `log_path`, `new_class_name`), any additional smokes, files changed, and deviations.
+   - `Status: escalation` — a test-boundary / stale-assert / plan / scope concern. You MUST relay it verbatim and wait for user direction (see escalation rule below). Do NOT advance or auto-resolve.
 
-When the implementer returns, you MUST surface its status report verbatim (files changed, smoke status, drive-by fixes) and update the progress block (`Last checkpoint: <date>`).
+3. On `smoke-ready`, run each reported smoke via `godot-smoke-runner` — one spawn per scene:
 
-If the implementer escalates a concern about a planner-authored artifact (a fixture-fragile test, a mis-framed assertion, a harness bug, etc.) — via mid-flight `AskUserQuestion` or surfaced in its Step 9 report — you MUST relay the concern verbatim and wait for user direction. You MUST NOT auto-resolve by inline-editing or by directing the implementer to patch.
+   ```
+   Agent({
+     description: "Run <smoke slug>",
+     subagent_type: "godot-smoke-runner",
+     prompt: "Run <smoke_scene>. Log: <log_path>. new_class_name: <true|false>."
+   })
+   ```
 
-If the implementer reports a smoke still failing after its own iteration budget, you MAY re-invoke it once with explicit guidance from the user. Beyond that, escalate to the user instead of looping further.
+   You MUST NOT run the engine yourself (`mcp__godot__run_project` / `get_debug_output` / `stop_project`) — the runner absorbs the verbose engine output so your context stays lean across iterations. The runner returns a JSON block with `status` (`pass` / `fail` / `compilation-error`), a `failures` list, and a 1-line `summary`.
+
+4. Act on the runner's result:
+   - `pass` (all reported smokes green) → surface the implementer's report + the green smoke summaries verbatim, update the progress block (`Last checkpoint: <date>`), advance to Phase 4.
+   - `fail` / `compilation-error` → re-dispatch the implementer with the JSON embedded so it classifies and fixes:
+
+     ```
+     Agent({
+       description: "Fix <plan slug> smoke failure",
+       subagent_type: "godot-feature-implementer",
+       prompt: "Continue the plan at <plan path>. The smoke <scene> failed — classify per your Step 7 and fix, or escalate (Mode B) if it's a test-boundary / stale-assert concern:\n<runner JSON>"
+     })
+     ```
+
+     If the failure is `compilation-error: Could not find type "X"` for a `class_name` the implementer just wrote, set `new_class_name: true` on the next runner spawn.
+
+5. Loop steps 3–4. Cap at ~5 code→smoke iterations. If the smoke still isn't green at the cap, STOP and escalate to the user with the latest failure rather than looping further. You MAY resume the loop once the user gives explicit guidance.
+
+You MUST NOT edit project source files directly during this phase — let the implementer own the diff. Your role in the loop is to run the runner and courier its JSON back, not to patch.
+
+**Escalation rule.** When the implementer returns `Status: escalation` (a fixture-fragile test, a mis-framed assertion, a harness bug, a stale cross-feature assert, a plan/sequencing doubt), you MUST relay the concern verbatim and wait for user direction. You MUST NOT auto-resolve by inline-editing, by directing the implementer to patch a planner-authored test, or by inline-fixing a stale assert yourself.
 
 ## Phase 4 — User verification checkpoint (MUST wait)
 
@@ -204,8 +266,8 @@ When `$ARGUMENTS == "resume"`:
 
 ## What this SOP does NOT do
 
-- Run the Godot engine directly (delegated to `godot-smoke-runner`).
-- Read Godot 4 API docs directly (delegated to planner's `Agent (Explore)` sub-agents).
+- Run the Godot engine directly (the orchestrator dispatches `godot-smoke-runner`, which absorbs the verbose engine output; the orchestrator never calls `mcp__godot__run_project` itself).
+- Doc-verify by default. The planner verifies its own API claims via the `godot-docs` MCP tools; the orchestrator's Phase 1.7 re-check is optional and on-request only.
 - Auto-chain phases past user checkpoints.
 - Auto-commit (atomic-docs stages; user approves).
 
@@ -258,6 +320,8 @@ These thoughts mean you're about to rationalize the SOP away:
 | "I read the SOP earlier; I remember the rules." | Skills evolve. Re-load the skill before acting; don't recall from memory. |
 | "I can answer the planner's questions myself from conversation context." | Pattern #2 says the user decides. Use `AskUserQuestion` at Phase 1.5; don't substitute your judgment for theirs. |
 | "Planner locked a decision in the plan; I'll just adjust at Phase 2 review." | If a decision is user-decidable, the planner shouldn't have locked it. Push back via inquiry handoff or re-plan; don't normalize silent locks. |
+| "I'll re-verify the planner's API claims myself to be safe." | The planner already verified them via godot-docs. The Phase 1.7 re-check is opt-in — offer it, don't run it unprompted. |
+| "The re-check says a claim is contradicted, but I can just patch the plan." | Load-bearing contradictions go back through the planner. Don't silently inline-fix the plan's design from a doc finding. |
 
 If any of these thoughts appear, STOP, return to the user, and re-state the current phase.
 
@@ -266,7 +330,7 @@ If any of these thoughts appear, STOP, return to the user, and re-state the curr
 | Symptom | Likely cause | Action |
 |---------|--------------|--------|
 | Planner asks no design questions | Task is well-specified or out-of-scope for the planner | Verify the plan file still captures edge cases; if too thin, re-run the planner with explicit "ask me about X, Y, Z". |
-| Implementer reports smoke green but user playtest disagrees | Smoke covers the wrong assertion | Add a failing smoke test that captures the user's case, then re-invoke implementer (Phase 3 fold-back). |
+| Smoke passes but user playtest disagrees | Smoke covers the wrong assertion | Have the implementer add a failing smoke test that captures the user's case (Phase 3 fold-back), then re-run the loop. |
 | `Skill → atomic-docs` reports drift in unrelated notes | Earlier work left stale references | Resolve those before committing — do not bypass the drift grep. |
 | `resume` cannot find a progress block | Block was scrubbed from context or never written | Ask the user which task to resume; do not infer from `git status`. |
 | Phase 1 ↔ Phase 3 ping-pong | Plan keeps changing under implementation | Stop. Raise to user — design is not converged; SOP is not the right tool for an exploratory phase. |

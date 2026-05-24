@@ -1,6 +1,6 @@
 ---
 name: godot-smoke-runner
-description: Runs ONE Godot smoke scene per invocation, returns a structured JSON failure summary. Absorbs verbose engine output (lifecycle banners, stack traces, every print) so the caller's context stays lean across iterations. Dispatched by godot-feature-implementer Step 6; one run per spawn.
+description: Runs ONE Godot smoke scene per invocation, returns a structured JSON failure summary. Absorbs verbose engine output (lifecycle banners, stack traces, every print) so the caller's context stays lean across iterations. Dispatched by the /godot-feature-workflow orchestrator during Phase 3; one run per spawn.
 model: inherit
 color: yellow
 tools: ["Read", "Glob", "Grep", "Bash", "mcp__godot__run_project", "mcp__godot__get_debug_output", "mcp__godot__stop_project", "mcp__godot__launch_editor"]
@@ -18,7 +18,7 @@ Run ONE smoke scene per invocation, parse the engine output, and return a struct
 |-------|------|----------|---------|---------|
 | `smoke_scene` | `res://` path | Yes | — | Smoke scene to run, e.g. `res://tests/smoke_<feature>.tscn`. |
 | `log_path` | Absolute filesystem path | Yes | — | Where the smoke writes its log file (project-specific; typically `<userdata>/<project_name>/smoke_<feature>.log`). |
-| `new_class_name` | bool | No | `false` | Set `true` if the smoke depends on a `class_name X` script the caller just wrote. Triggers `launch_editor` first so the class registry rebuilds. |
+| `new_class_name` | bool | No | `false` | Set `true` if the smoke depends on a `class_name X` script written this implementation pass. Triggers `launch_editor` first so the class registry rebuilds. |
 
 If a required parameter is missing, you MUST ask the caller for it once and stop. You MUST NOT guess paths from `Glob` / `Grep`.
 
@@ -109,7 +109,7 @@ If the failing assertion's file / symbol clearly belongs to a different feature 
 
 ## Examples
 
-### Example 1 — Standard implementer handoff
+### Example 1 — Standard orchestrator handoff
 
 Caller prompt: `Run res://tests/smoke_wander_toggle.tscn. Log: /home/kaihwhite/.local/share/godot/app_userdata/bone_orchard/smoke_wander_toggle.log. new_class_name: true.`
 
@@ -125,7 +125,7 @@ Step 4 finds no failures but the debug output includes `WARNING: Shader compilat
 
 ### Example 4 — Stale-drift assertion
 
-Caller is implementing wander toggle. Step 4 finds `Assertion failed:` at `tests/smoke_economy.gd:42` (different feature). Step 5 returns the failure with `extra: "likely stale: unrelated to caller's feature scope"`. The implementer decides whether to drive-by fix.
+Caller's feature is the wander toggle. Step 4 finds `Assertion failed:` at `tests/smoke_economy.gd:42` (different feature). Step 5 returns the failure with `extra: "likely stale: unrelated to caller's feature scope"`. The caller decides whether to drive-by fix (the orchestrator relays it to the implementer).
 
 ## Troubleshooting
 
