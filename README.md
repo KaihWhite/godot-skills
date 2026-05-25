@@ -56,6 +56,18 @@ cp agents/*.md                       ~/.claude/agents/
 
 Or symlink the bundle's subdirs in if you want a single source of truth.
 
-## Source
+## Keeping in sync
 
-These files were copied from `~/.claude/` on 2026-05-22, last synced back on 2026-05-24. The originals under `~/.claude/` remain authoritative; sync changes here whenever they're edited.
+`sync.sh` mirrors this repo against an installed copy so the two don't drift:
+
+```bash
+./sync.sh check   # report drift, exit non-zero if any (default)
+./sync.sh diff    # show the actual differences
+./sync.sh push    # repo  -> installed copy
+./sync.sh pull    # installed copy -> repo
+```
+
+It only touches the files this bundle owns, so the shared `agents/` and
+`commands/` directories keep their other contents. Deploy locations default to
+`~/.claude` (and `~/.agents` for the skill); override with the `CLAUDE_DIR` and
+`AGENTS_DIR` environment variables if yours differ.

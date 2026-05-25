@@ -115,7 +115,7 @@ Reach for it whenever you'd otherwise be guessing:
 
 The failure mode this skill prevents is pulling full doc pages into a context that has to keep reasoning afterward. There are two valid ways to avoid it; pick by capability:
 
-**Preferred — delegate to an Explore sub-agent.** If the current agent can spawn sub-agents (e.g. the main-thread orchestrator), this is the best option: it keeps the verbose page out of your context entirely. Spawn `Agent` with `subagent_type: "Explore"` and give it:
+**Preferred — delegate to an Explore sub-agent.** If the current agent can spawn sub-agents (e.g. the main-thread orchestrator), this is the best option: it keeps the verbose page out of your context entirely. Spawn `Agent` with `subagent_type: "Explore"` and `model: "sonnet"` — doc lookup is mechanical extraction, so Sonnet is fast and sufficient; without the override the Explore agent inherits the parent's model (e.g. Opus), which wastes capability on a retrieval task. Give it:
 
 1. The exact MCP call to make — `mcp__godot-docs__get_documentation_file` (or `get_documentation_tree` first if the doc path is unknown).
 2. The class or doc path (e.g. `Area2D`, `classes/class_characterbody2d.rst`).

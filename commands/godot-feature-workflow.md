@@ -139,11 +139,13 @@ The planner has already verified its API claims against the docs and listed them
    Agent({
      description: "Re-verify <plan slug> API claims",
      subagent_type: "Explore",
+     model: "sonnet",
      prompt: "Independently re-verify these Godot 4 API / behavior claims against the official docs. The godot-docs MCP tools are deferred — first run ToolSearch(\"select:mcp__godot-docs__get_documentation_tree,mcp__godot-docs__get_documentation_file\") to load them, then use get_documentation_tree to locate the right page and get_documentation_file to read it. For each claim, report confirmed / contradicted / not-found WITH the doc reference (file path + section):\n1. <claim>\n2. <claim>\n...\nProject context lives in CLAUDE.md. Report conclusions only — do not dump doc excerpts."
    })
    ```
 
    Dispatch discipline (keeps doc pages out of your context, returns trustworthy answers):
+   - Use `model: "sonnet"` — doc re-verification is mechanical extraction, so Sonnet is fast and sufficient; without the override the Explore agent inherits the orchestrator's model (e.g. Opus), wasting capability on a retrieval task.
    - Parallel by default — 2+ independent claims go in a single message, not serial roundtrips.
    - Give each claim the exact doc path the planner already recorded (e.g. `classes/class_characterbody2d.md`); let the Explore agent fall back to `get_documentation_tree` when none is named.
    - Demand conclusions, not excerpts — `confirmed / contradicted / not-found` plus a one-line doc reference. If an agent returns a doc dump, re-dispatch with a tighter cap rather than accepting it.
