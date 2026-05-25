@@ -111,11 +111,11 @@ Reach for it whenever you'd otherwise be guessing:
 - Anything you remember as "I think this was renamed in 4.x" or "I think this is deprecated"
 - Anything a pattern below references but doesn't fully spell out
 
-### Delegation rule (do NOT call the docs MCP from the main thread)
+### How to query — delegate when you can, read directly when you can't
 
-`mcp__godot-docs__get_documentation_tree` and `mcp__godot-docs__get_documentation_file` live in `Agent (Explore)` sub-agents by design. Pulling full doc pages into your main context is the failure mode this skill is preventing.
+The failure mode this skill prevents is pulling full doc pages into a context that has to keep reasoning afterward. There are two valid ways to avoid it; pick by capability:
 
-For each lookup, spawn `Agent` with `subagent_type: "Explore"` and give it:
+**Preferred — delegate to an Explore sub-agent.** If the current agent can spawn sub-agents (e.g. the main-thread orchestrator), this is the best option: it keeps the verbose page out of your context entirely. Spawn `Agent` with `subagent_type: "Explore"` and give it:
 
 1. The exact MCP call to make — `mcp__godot-docs__get_documentation_file` (or `get_documentation_tree` first if the doc path is unknown).
 2. The class or doc path (e.g. `Area2D`, `classes/class_characterbody2d.rst`).
@@ -124,12 +124,14 @@ For each lookup, spawn `Agent` with `subagent_type: "Explore"` and give it:
 
 Batch 2+ independent lookups in a single message so they run in parallel.
 
+**Fallback — call the docs MCP directly.** Sub-agents can't spawn their own sub-agents, so an agent that is itself a sub-agent (e.g. the feature planner or implementer) cannot delegate — it MUST call `mcp__godot-docs__get_documentation_tree` / `get_documentation_file` itself. When you do, read targeted: pull the one signal signature, default, enum, or deprecation note the question turns on, then move on. Never carry a whole class page forward into your reasoning.
+
 ### Anti-patterns
 
-- Calling `mcp__godot-docs__*` from the main thread.
+- Delegating to an Explore sub-agent when you *can* (you're not already a sub-agent) but choosing to read the MCP directly anyway — delegation is preferred whenever it's available.
 - Asking an Explore sub-agent "what's the Godot 4 API for X?" without naming a class or doc path.
 - Skipping verification because "the pattern already shows it" — patterns show shape, not current API surface.
-- Pulling a full class page when one signal's signature was the question.
+- Pulling a full class page into your own context when one signal's signature was the question.
 
 ## Patterns
 
