@@ -16,7 +16,6 @@ godot-skills/
 └── agents/
     ├── godot-auditor.md
     ├── godot-feature-implementer.md
-    ├── godot-feature-planner.md
     └── godot-smoke-runner.md
 ```
 
@@ -32,14 +31,13 @@ godot-skills/
 
 | Command | Purpose |
 | --- | --- |
-| `/godot-feature-workflow <task \| plan path \| resume>` | Orchestrates a test-first agent pipeline (planner → optional doc re-check → user checkpoint → implementer, with the orchestrator owning the code→smoke→fix loop) for non-trivial features. Keeps heavy context inside sub-agents. |
+| `/godot-feature-workflow <task \| plan path \| resume>` | Orchestrates a test-first pipeline for non-trivial features: the main agent plans in-session (asking design questions inline, verifying API claims via Explore sub-agents) → user checkpoint → implementer, with the orchestrator owning the code→smoke→fix loop. Delegates heavy doc + engine work to sub-agents. |
 | `/godot-audit <scope>` | Project-wide code-quality + doc-drift sweep using parallel `godot-auditor` sub-agents sharded by symbol ownership. Produces one merged report. |
 
 ### Agents
 
 | Agent | Role |
 | --- | --- |
-| `godot-feature-planner` | Phase 1 of `/godot-feature-workflow`. Resolves design ambiguities, consults patterns, verifies its API claims against the docs (`godot-docs` MCP), writes failing smoke tests, exits with a plan file. |
 | `godot-feature-implementer` | Phase 3 of `/godot-feature-workflow`. Codes one pass per dispatch against the plan; the orchestrator runs `godot-smoke-runner` and loops failures back until smoke tests are green. |
 | `godot-smoke-runner` | Runs ONE smoke scene per invocation; returns a JSON failure summary. Absorbs verbose engine output so the caller's context stays lean. Dispatched by the orchestrator during Phase 3. |
 | `godot-auditor` | Project-wide quality + doc-drift sweep for milestone-close. Walks every `class_name`, autoload, and public symbol. Not for per-task work. |

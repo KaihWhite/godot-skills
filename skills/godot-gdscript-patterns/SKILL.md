@@ -124,7 +124,7 @@ The failure mode this skill prevents is pulling full doc pages into a context th
 
 Batch 2+ independent lookups in a single message so they run in parallel.
 
-**Fallback — call the docs MCP directly.** Sub-agents can't spawn their own sub-agents, so an agent that is itself a sub-agent (e.g. the feature planner or implementer) cannot delegate — it MUST call `mcp__godot-docs__get_documentation_tree` / `get_documentation_file` itself. When you do, read targeted: pull the one signal signature, default, enum, or deprecation note the question turns on, then move on. Never carry a whole class page forward into your reasoning.
+**Fallback — call the docs MCP directly.** Sub-agents can't spawn their own sub-agents, so an agent that is itself a sub-agent (e.g. the feature implementer) cannot delegate — it MUST call `mcp__godot-docs__get_documentation_tree` / `get_documentation_file` itself. When you do, read targeted: pull the one signal signature, default, enum, or deprecation note the question turns on, then move on. Never carry a whole class page forward into your reasoning.
 
 ### Anti-patterns
 
