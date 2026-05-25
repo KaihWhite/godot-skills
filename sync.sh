@@ -2,6 +2,9 @@
 #
 # sync.sh — keep this repo and the deployed Claude/Codex copies in sync.
 #
+# This repo is the authoritative source; `push` deploys it, `pull` is for
+# recovering edits made directly to the deployed copies.
+#
 # Deploy mapping (repo  <->  deployed):
 #   agents/*.md                     <->  $CLAUDE_DIR/agents/*.md       (file-level, shared dir)
 #   commands/*.md                   <->  $CLAUDE_DIR/commands/*.md     (file-level, shared dir)
@@ -17,7 +20,7 @@
 #   ./sync.sh check   # report drift, exit 1 if any (default)
 #   ./sync.sh diff    # show the actual diffs
 #   ./sync.sh push    # repo  -> deployed
-#   ./sync.sh pull    # deployed -> repo   (deployed is the authoritative source)
+#   ./sync.sh pull    # deployed -> repo
 #
 set -euo pipefail
 
