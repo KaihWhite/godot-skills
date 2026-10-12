@@ -13,8 +13,10 @@
 # The agents/ and commands/ deploy dirs also hold unrelated files, so this
 # script only ever touches the files this repo owns and never deletes there.
 # The skill lives in its own dedicated dir, so its tree is mirrored exactly.
-# (Claude Code reaches the skill via ~/.claude/skills/godot-gdscript-patterns,
-#  a symlink to $AGENTS_DIR/skills/godot-gdscript-patterns — not synced here.)
+# Claude Code reaches the skill via $CLAUDE_DIR/skills/godot-gdscript-patterns,
+# which must be a symlink to $AGENTS_DIR/skills/godot-gdscript-patterns. `check`
+# verifies the link (a real dir there is a stale copy Claude Code would read
+# instead); `push` creates it when absent but never replaces what's there.
 #
 # Usage:
 #   ./sync.sh check   # report drift, exit 1 if any (default)
@@ -38,12 +40,26 @@ for f in "$REPO_DIR"/commands/*.md; do
 done
 manifest+=("$REPO_DIR/skills/godot-gdscript-patterns::$AGENTS_DIR/skills/godot-gdscript-patterns::tree")
 
+SKILL_TARGET="$AGENTS_DIR/skills/godot-gdscript-patterns"
+SKILL_LINK="$CLAUDE_DIR/skills/godot-gdscript-patterns"
+
 mode="${1:-check}"
 drift=0
 
 tree_in_sync() { # $1=src $2=dst -> 0 if identical by content (ignores mtime)
   [[ -d "$2" ]] || return 1
   [[ -z "$(rsync -rcin --delete "$1"/ "$2"/ 2>/dev/null)" ]]
+}
+
+link_ok() { # 0 if SKILL_LINK is a symlink resolving to SKILL_TARGET
+  [[ -L "$SKILL_LINK" && -d "$SKILL_TARGET" ]] || return 1
+  [[ "$(cd "$SKILL_LINK" && pwd -P)" == "$(cd "$SKILL_TARGET" && pwd -P)" ]]
+}
+
+link_problem() { # describe why SKILL_LINK is wrong
+  if [[ -L "$SKILL_LINK" ]]; then echo "symlink points to $(readlink "$SKILL_LINK"), not $SKILL_TARGET"
+  elif [[ -e "$SKILL_LINK" ]]; then echo "is a real directory/file, not a symlink — Claude Code reads that stale copy"
+  else echo "is missing"; fi
 }
 
 for entry in "${manifest[@]}"; do
@@ -90,6 +106,27 @@ for entry in "${manifest[@]}"; do
       echo "usage: $0 {check|diff|push|pull}" >&2; exit 2;;
   esac
 done
+
+link_label="${SKILL_LINK/#$HOME/~}"
+case "$mode" in
+  check|diff)
+    if link_ok; then
+      [[ "$mode" == check ]] && echo "OK    $link_label -> skill"
+    else
+      drift=1
+      echo "LINK  $link_label $(link_problem)"
+    fi
+    ;;
+  push)
+    if [[ ! -e "$SKILL_LINK" && ! -L "$SKILL_LINK" ]]; then
+      mkdir -p "$(dirname "$SKILL_LINK")"
+      ln -s "$SKILL_TARGET" "$SKILL_LINK" && echo "link  $link_label -> skill"
+    elif ! link_ok; then
+      echo "LINK  $link_label $(link_problem); not replacing it — move it aside, then re-run push" >&2
+      exit 1
+    fi
+    ;;
+esac
 
 if [[ "$mode" == check || "$mode" == diff ]]; then
   if [[ "$drift" -eq 0 ]]; then echo "all in sync"; else echo "drift detected"; exit 1; fi
