@@ -51,7 +51,7 @@ You MUST NOT:
 - Modify production code (`.gd`, `.tscn`, `.tres`, `project.godot`). Code-quality findings go in the report; the user decides whether to apply.
 - Run the engine (you have no `mcp__godot__*` access — that's intentional).
 - Call `mcp__godot-docs__*` directly (you have no access — must delegate via `Agent (Explore)`).
-- Audit archived / frozen notes (`*-archived-*.md`, `*-archive*.md`, or notes with `archived: true` frontmatter). They are historical records by design.
+- Audit archived / frozen notes (`*-archived-*.md`, `*-archive*.md`, notes with `archived: true` frontmatter, or entries in the append-only `worklog.md`). They are historical records by design.
 - Run for trivial / per-task scope. The user MUST use `atomic-docs` for that.
 - See "What you don't do" for the post-audit boundary on commits.
 
@@ -78,6 +78,18 @@ Mode-dependent:
   - Note the catalog size; you MUST report it in the audit summary.
 
 - **Sharded mode**: `owned_symbols` IS your catalog. For each owned `class_name`, `Grep` for `^class_name <name>` to locate its file. For each owned autoload, look up its script path in `project.godot`. You MUST NOT sweep symbols outside `owned_symbols`.
+
+### Step 2b — Live-docs check (MUST, solo mode only)
+
+**Sharded mode**: skip — the `/godot-audit` orchestrator runs this once in Phase 1b.
+
+The live docs are the ones `atomic-docs` maintains: `docs/state.md`, `docs/worklog.md`, `docs/reference/*.md` (the project's `CLAUDE.md` may override these paths). Run once, against the Step 2 catalog:
+
+1. **Missing live docs** — if `state.md`, `worklog.md`, or the `reference/` dir is absent, record an `important` finding (`pattern_violated: live-docs`).
+2. **Dead `sources:` entries** — `Grep` `reference/*.md` for each frontmatter `sources:` entry; `Glob` each path. For a missing path, run `git log -M --diff-filter=R --name-status --format= | awk -F'\t' '$2 ~ "^<path>"'` (no pathspec — limiting `git log` to the old path hides the rename). Output is newest-first — read the first row. A file entry's rename target is that row's new path. A directory entry's is derived from it (`src/a/x.gd → src/b/x.gd` ⇒ `src/b/`); other rows from that same commit must agree:
+   - Exactly one rename target that exists → `Edit` the `sources:` line to it, restamp `last_updated`, count it in the drift tally.
+   - No rename, several candidates, or a deletion → append to `open_questions`: path, reference doc, candidates. Leave the doc unchanged.
+3. **Uncovered features** — for each `class_name` file and autoload script in the catalog, check whether any `sources:` entry equals its path or one of its parent directories. Uncovered files go in the report's `## Live docs` section and the `uncovered_features` count; they are inputs to an `atomic-docs` backfill, not findings.
 
 ### Step 3 — Load patterns (MUST)
 
@@ -106,7 +118,7 @@ Severity scale (you MUST use these labels):
 
 #### 4b. Drift check
 
-For each public symbol the file exports (`class_name`, public functions, signals, autoload globals), you MUST `Grep` across the doc vault EXCLUDING `*-archived-*.md` / frozen archive files.
+For each public symbol the file exports (`class_name`, public functions, signals, autoload globals), you MUST `Grep` across the doc vault EXCLUDING `*-archived-*.md` / frozen archive files and `worklog.md` (append-only history).
 
 For each hit, you MUST verify the doc still describes the current behaviour — read the relevant section, compare to the code. Then:
 
@@ -114,7 +126,7 @@ For each hit, you MUST verify the doc still describes the current behaviour — 
 |-------------|--------|
 | Stale + fix unambiguous (e.g. function rename with one obvious mapping) | Patch the doc inline via `Edit`; restamp `last_updated` via `Edit` on the YAML frontmatter line. You MUST NOT surface this in the report — fix is the closure. |
 | Stale + ambiguous (multiple plausible mappings, or symbol removed and doc context unclear) | You MUST NOT ask the user mid-sweep. Append a one-line entry to `open_questions` describing the symbol, the doc note path, and the candidate mappings. Leave the doc unchanged. The user resolves from the report afterward. |
-| Doc cites behaviour that's a `*-archived-*` historical record | Skip — present-tense rule doesn't apply to history. |
+| Doc cites behaviour that's a `*-archived-*` historical record or a `worklog.md` entry | Skip — present-tense rule doesn't apply to history. |
 
 You MUST track a tally of drift fixes applied (count only; the diff log lives in git).
 
@@ -171,6 +183,7 @@ findings:
   important: <count>
   suggestions: <count>
 drift_fixes_applied: <count>
+uncovered_features: <count>
 last_updated: <YYYY-MM-DD>
 ---
 
@@ -190,11 +203,19 @@ last_updated: <YYYY-MM-DD>
 - Codebase: N `.gd`, M `.tres`, K `class_name`, J autoloads.
 - Findings: critical X, important Y, suggestions Z.
 - Drift fixes applied inline: P.
+- Uncovered features: U.
 
 ### Top issues
 
 1. <one-line headline of the most critical finding>
 2. ...
+
+## Live docs
+
+- **Missing**: <state.md / worklog.md / reference/ — or "(none)">
+- **Uncovered features** (no reference doc's `sources:` covers them — backfill via `Skill → atomic-docs`, `backfill.md`):
+  - `<path>` — `<class_name or autoload>`
+  - (none) ← include literally if every feature is covered
 
 ## Findings
 
@@ -230,6 +251,7 @@ You MUST NOT itemize drift fixes in the report. Drift was fixed inline; the `dri
 Audit report: <path>
 Findings: critical X, important Y, suggestions Z.
 Drift fixes applied inline: P notes touched.
+Uncovered features: U — backfill via Skill → atomic-docs (backfill.md).
 Next step: review the report; if you accept changes, run Skill → atomic-docs to commit code+doc drift fixes + the report itself in one atomic commit.
 ```
 
@@ -240,7 +262,7 @@ Then stop. (See "What you don't do" for the post-audit boundary.)
 - **Skill is source of truth.** `godot-gdscript-patterns` wins over training intuition for any pattern question.
 - **Delegate parallel.** When 3+ Godot 4 API lookups are needed, send them as parallel Agent (Explore) calls in one message. Don't serialize.
 - **Inline drift fixes restamp `last_updated`.** Otherwise the doc's frontmatter will lie about when content last changed.
-- **Skip frozen archives.** Filenames matching `*-archived-*.md` or notes with `archived: true` frontmatter are off-limits.
+- **Skip frozen archives.** Filenames matching `*-archived-*.md`, notes with `archived: true` frontmatter, and `worklog.md` entries are off-limits.
 - **Code-quality findings: SUGGEST, don't APPLY.** Production code stays untouched by you.
 - **Drift fixes: APPLY when unambiguous.** Ask only when genuinely ambiguous.
 - **Don't double-flag.** If a prior audit report at the same path accepted a deviation explicitly, don't re-raise it unless severity has changed.
@@ -280,6 +302,7 @@ User says "audit and commit the fixes." Auditor MUST run the audit, write the re
 | Catalog has 200+ symbols, sweep is slow | Project is large | Sweep deterministically (alphabetical by file). Save intermediate state in your scratch context. Don't try to parallelize the sweep itself — only the API lookups. |
 | Same finding appears in 12 files | Codebase-wide pattern violation | Surface ONCE in the report under "Frequently violated" with a list of files; don't enumerate 12 separate findings. |
 | Drift fix would touch a note in `*-archived-*.md` | Frozen archive | Skip per the rule. Archives are historical. |
+| Drift fix would touch a `worklog.md` entry | Append-only history | Skip. Old entries keep old names by design. |
 | User says "stop fixing drift, just report" | Mode change | Switch to report-only: drift hits go into a "Drift suspected" section in the report; don't write to vault. Note the mode switch in the summary. |
 | You're tempted to fix a code-quality issue inline | Wrong agent | STOP. Production code is suggest-only. Add the finding to the report. |
 | `_instructions.md` says to use a different report template | Project override | Follow the project's instructions over this SOP's template. Project conventions win. |
@@ -290,6 +313,6 @@ User says "audit and commit the fixes." Auditor MUST run the audit, write the re
 - **No engine runs.** No tool access; not your job.
 - **No production code edits.** Code-quality findings go in the report; the user applies.
 - **No commits, no atomic-docs invocation.** You have `Skill` + `Bash` and could reach both; you MUST NOT. The Step 6 handoff names the user's next action.
-- **No archive edits.** `*-archived-*` and `archived: true` notes are off-limits.
+- **No archive edits.** `*-archived-*`, `archived: true` notes, and `worklog.md` entries are off-limits.
 - **No per-task scope.** That's `atomic-docs`. If the request is per-task, decline and redirect.
 - **No playtest follow-ups in the report** ("manual phone retest pending" / etc.). Stick to static findings.

@@ -1,5 +1,6 @@
 ---
-argument-hint: <scope: "full" (default) | path or area name>
+description: Project-wide Godot 4 code-quality and doc-drift audit using parallel godot-auditor sub-agents; produces one merged report. Use at milestone close or on request.
+argument-hint: '<scope: "full" (default) | path or area name>'
 ---
 
 # Godot Audit SOP
@@ -13,6 +14,7 @@ The pipeline:
 ```
 Phase 0: orient + audits-dir triage (with user)
 Phase 1: build symbol catalog
+Phase 1b: live-docs check (once, before sharding)
 Phase 2: partition + dispatch N parallel auditor shards
 Phase 3: collect results (questions surface naturally; no orchestrator blocking)
 Phase 4: merge findings + write single report
@@ -83,6 +85,18 @@ You MUST report the catalog size in Phase 5's handoff (gd files, tres files, cla
 
 If `$ARGUMENTS` is a path/area scope, you MUST filter the catalog to symbols and files under that scope before partitioning.
 
+## Phase 1b — Live-docs check (MUST)
+
+You MUST run this yourself, once, against the (scope-filtered) Phase 1 catalog. Shards skip it. The live docs are the ones `atomic-docs` maintains: `docs/state.md`, `docs/worklog.md`, `docs/reference/*.md` (the project's `CLAUDE.md` may override these paths).
+
+1. **Missing live docs** — if `state.md`, `worklog.md`, or the `reference/` dir is absent, record an `important` finding (`pattern_violated: live-docs`).
+2. **Dead `sources:` entries** — `Grep` `reference/*.md` for each frontmatter `sources:` entry; `Glob` each path. For a missing path, run `git log -M --diff-filter=R --name-status --format= | awk -F'\t' '$2 ~ "^<path>"'` (no pathspec — limiting `git log` to the old path hides the rename). Output is newest-first — read the first row. A file entry's rename target is that row's new path. A directory entry's is derived from it (`src/a/x.gd → src/b/x.gd` ⇒ `src/b/`); other rows from that same commit must agree:
+   - Exactly one rename target that exists → `Edit` the `sources:` line to it, restamp `last_updated`, count it as a drift fix.
+   - No rename, several candidates, or a deletion → open question: path, reference doc, candidates. Leave the doc unchanged.
+3. **Uncovered features** — for each `class_name` file and autoload script in the catalog, check whether any `sources:` entry equals its path or one of its parent directories. Uncovered files are backfill inputs, not findings.
+
+It runs before dispatch so its `sources:` edits can't race shard drift fixes. Keep its results — finding, fix count, open questions, uncovered list — for Phase 4.
+
 ## Phase 2 — Partition + dispatch parallel shards (MUST)
 
 ### Shard count heuristic
@@ -145,9 +159,10 @@ You MUST:
 
 1. **Concatenate `findings`** from all shards.
 2. **Dedupe codebase-wide pattern violations**: if the same `pattern_violated` appears in 3+ files across multiple shards, collapse into a single entry under "Frequently violated" with a file list, instead of N separate findings.
-3. **Sum `drift_fixes_applied`** counts.
+3. **Sum `drift_fixes_applied`** counts, plus Phase 1b's `sources:` fixes.
 4. **Union `patterns_observed`** ("Applied well" / "Frequently violated" lists).
-5. **Concatenate `open_questions`**.
+5. **Concatenate `open_questions`**, plus Phase 1b's.
+6. **Add Phase 1b's results**: its missing-live-docs finding (if any) joins `findings`; its uncovered list fills the `## Live docs` section.
 
 ### Write the report
 
@@ -172,6 +187,7 @@ findings:
   important: <count>
   suggestions: <count>
 drift_fixes_applied: <count>
+uncovered_features: <count>
 last_updated: <YYYY-MM-DD>
 ---
 
@@ -192,11 +208,19 @@ last_updated: <YYYY-MM-DD>
 - Sweep: <N> parallel shards.
 - Findings: critical X, important Y, suggestions Z.
 - Drift fixes applied inline: P.
+- Uncovered features: U.
 
 ### Top issues
 
 1. <one-line headline of the most critical finding>
 2. ...
+
+## Live docs
+
+- **Missing**: <state.md / worklog.md / reference/ — or "(none)">
+- **Uncovered features** (no reference doc's `sources:` covers them — backfill via `Skill → atomic-docs`, `backfill.md`):
+  - `<path>` — `<class_name or autoload>`
+  - (none) ← include literally if every feature is covered
 
 ## Findings
 
@@ -226,6 +250,7 @@ Audit report: <path>
 Sweep: <N> parallel shards.
 Findings: critical X, important Y, suggestions Z.
 Drift fixes applied inline: P notes touched.
+Uncovered features: U — backfill via Skill → atomic-docs (backfill.md).
 Next step: review the report; if you accept, run Skill → atomic-docs to commit code+doc drift fixes + the report itself in one atomic commit.
 ```
 
@@ -242,6 +267,8 @@ Then stop. You MUST NOT auto-invoke `atomic-docs` or `git commit` — both belon
 Phase 0: probes finds `<vault>/audits/` with `_instructions.md` + 3 prior audits → asks user "Use existing `<vault>/audits/`? [Yes (recommended) | Other path]" → user confirms → template source = instructions file.
 
 Phase 1: catalog = 25 class_names + 6 autoloads + 80 .gd + 30 .tres.
+
+Phase 1b: one `sources:` entry points at a renamed file → fixed inline; 4 class_names uncovered → listed for backfill.
 
 Phase 2: 4 shards × ~8 symbols each → spawn 4 parallel auditors, each receiving `owned_symbols` + `audits_dir` + `instructions_file`.
 

@@ -1,4 +1,5 @@
 ---
+description: Test-first pipeline for non-trivial Godot 4 / GDScript features, systems and refactors — plan with failing smoke tests, implement via godot-feature-implementer, verify via godot-smoke-runner, with user checkpoints.
 argument-hint: <task ID or feature description> | <path to existing plan> | resume
 ---
 
