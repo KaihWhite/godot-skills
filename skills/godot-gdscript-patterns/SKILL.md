@@ -1,19 +1,29 @@
 ---
 name: godot-gdscript-patterns
 description: >
-  Use when writing, reviewing, or designing GDScript code in Godot 4 —
-  implementing nodes/scenes/resources, wiring signals or autoloads, applying
-  state machines or component patterns, refactoring scene architecture, or
-  evaluating GDScript performance. Also activate on questions framed as
-  "how do I do X in GDScript" or "what's the right pattern for Y in Godot".
-  Skip for non-code work (level design, art import, editor UI, project
-  export config), brainstorming game mechanics, or feature orchestration
-  (use godot-feature-workflow for that).
+  Use when designing, planning, writing, testing, or reviewing GDScript code
+  in Godot 4, in any workflow — implementing nodes/scenes/resources, wiring
+  signals or autoloads, applying state machines or component patterns,
+  refactoring scene architecture, writing smoke tests, or evaluating GDScript
+  performance. Also activate on questions framed as "how do I do X in
+  GDScript" or "what's the right pattern for Y in Godot". Skip for non-code
+  work (level design, art import, editor UI, project export config).
 ---
 
 # Godot GDScript Patterns
 
-Production patterns for Godot 4.x game development with GDScript, covering architecture, signals, scenes, and optimization.
+Production patterns for Godot 4.x game development with GDScript, covering architecture, signals, scenes, testing, and optimization.
+
+## Applying Across Stages
+
+Whatever workflow drives the work, apply this skill at each stage:
+
+| Stage | Apply |
+|-------|-------|
+| Design / plan | Name the pattern each component uses (state machine, autoload, Resource data, pool, component) and why. A plan that doesn't name one is guessing. |
+| Test first | Write the failing smoke test before the code — see [Testing GDScript](#testing-gdscript). |
+| Implement | Follow the named pattern's shape; verify every API you'd otherwise recall from memory — see [Verifying Godot 4 APIs](#verifying-godot-4-apis-use-the-docs-mcp). |
+| Review | Check the code against the pattern the plan named, not just against "does it run". |
 
 ## Core Concepts
 
@@ -115,7 +125,7 @@ Reach for it whenever you'd otherwise be guessing:
 
 The failure mode this skill prevents is pulling full doc pages into a context that has to keep reasoning afterward. There are two valid ways to avoid it; pick by capability:
 
-**Preferred — delegate to an Explore sub-agent.** If the current agent can spawn sub-agents (e.g. the main-thread orchestrator), this is the best option: it keeps the verbose page out of your context entirely. Spawn `Agent` with `subagent_type: "Explore"` and `model: "sonnet"` — doc lookup is mechanical extraction, so Sonnet is fast and sufficient; without the override the Explore agent inherits the parent's model (e.g. Opus), which wastes capability on a retrieval task. Give it:
+**Preferred — delegate to an Explore sub-agent.** If the current agent can spawn sub-agents (e.g. a main session), this is the best option: it keeps the verbose page out of your context entirely. Spawn `Agent` with `subagent_type: "Explore"` and `model: "sonnet"` — doc lookup is mechanical extraction, so Sonnet is fast and sufficient; without the override the Explore agent inherits the parent's model (e.g. Opus), which wastes capability on a retrieval task. Give it:
 
 1. The exact MCP call to make — `mcp__godot-docs__get_documentation_file` (or `get_documentation_tree` first if the doc path is unknown).
 2. The class or doc path (e.g. `Area2D`, `classes/class_characterbody2d.rst`).
@@ -124,7 +134,7 @@ The failure mode this skill prevents is pulling full doc pages into a context th
 
 Batch 2+ independent lookups in a single message so they run in parallel.
 
-**Fallback — call the docs MCP directly.** Sub-agents can't spawn their own sub-agents, so an agent that is itself a sub-agent (e.g. the feature implementer) cannot delegate — it MUST call `mcp__godot-docs__get_documentation_tree` / `get_documentation_file` itself. When you do, read targeted: pull the one signal signature, default, enum, or deprecation note the question turns on, then move on. Never carry a whole class page forward into your reasoning.
+**Fallback — call the docs MCP directly.** Sub-agents can't spawn their own sub-agents, so an agent that is itself a sub-agent (e.g. a dispatched implementer) cannot delegate — it MUST call `mcp__godot-docs__get_documentation_tree` / `get_documentation_file` itself. When you do, read targeted: pull the one signal signature, default, enum, or deprecation note the question turns on, then move on. Never carry a whole class page forward into your reasoning.
 
 ### Anti-patterns
 
@@ -132,6 +142,62 @@ Batch 2+ independent lookups in a single message so they run in parallel.
 - Asking an Explore sub-agent "what's the Godot 4 API for X?" without naming a class or doc path.
 - Skipping verification because "the pattern already shows it" — patterns show shape, not current API surface.
 - Pulling a full class page into your own context when one signal's signature was the question.
+
+## Testing GDScript
+
+Smoke tests are headless scenes that exercise a feature, print a verdict, and quit. They work in any workflow and give TDD a red/green signal.
+
+### Setup
+
+**If the project already has a harness, use it** — check `CLAUDE.md` and the test helpers directory first. Otherwise copy this skill's bundled files:
+
+- `assets/smoke_harness.gd` → `scripts/tests/helpers/smoke_harness.gd` (`class_name SmokeHarness`)
+- `assets/run_smoke.sh` → `tools/run_smoke.sh`
+
+### Test shape
+
+`res://tests/smoke_<feature>.tscn` — a root `Node` with the script attached. Omit `uid="..."` from the `[gd_scene format=3]` header; Godot assigns one on first scan.
+
+```gdscript
+# smoke_counter.gd
+extends SmokeHarness
+
+func _tests() -> Array:
+    return [
+        ["adds", _test_adds],
+        ["survives_a_frame", _test_frame],
+    ]
+
+func _test_adds() -> void:
+    var c := Counter.new()
+    c.add(2)
+    _check(c.value == 2, "value %d" % c.value)
+
+func _test_frame() -> void:
+    await get_tree().process_frame  # tests may await
+    _check(is_inside_tree(), "still in tree")
+```
+
+`_check()` records a failure and keeps going — every test runs, every `CHECK FAILED:` line prints. Use `_check_near()` for floats. The harness prints `result=PASS` or `result=FAIL` and quits with exit code 0 or 1.
+
+### Running
+
+**Godot MCP available** (`mcp__godot__*` tools) → use it:
+
+1. Only if the test depends on a `class_name` written since the last editor scan: `mcp__godot__launch_editor`, wait ~5–10 s, so the class registry rebuilds.
+2. `mcp__godot__run_project` with the scene, then `mcp__godot__get_debug_output`, then `mcp__godot__stop_project`.
+
+**No MCP** → `sh tools/run_smoke.sh smoke_<feature>` (set `GODOT` if the binary isn't on `PATH`). It runs an import pass first (so new `class_name`s resolve), kills the run early on a parse error, and enforces a `SMOKE_TIMEOUT` watchdog.
+
+**Pass** = `result=PASS` in the output, no `SCRIPT ERROR` / `Parse Error`, and (script) exit code 0. A runtime error aborts its `_test_*` without failing a check, so `result=PASS` alone isn't enough.
+
+Engine output is verbose. If your environment provides a smoke-runner sub-agent, have it run the smoke and return only the failures.
+
+### TDD notes
+
+- **Valid red = a `CHECK FAILED:` line.** A parse error or missing-type error means the test never ran — fix that before calling it red.
+- One smoke scene per feature; name tests after the behaviour they pin (`rejects_when_full`, not `test3`).
+- Legacy smokes using `assert()` halt at the first failure; later tests in that file never run.
 
 ## Patterns
 

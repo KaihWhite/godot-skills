@@ -148,12 +148,12 @@ In the plan's `API references consulted` section, record each verified item: the
 
 ### Step 5 — Test design (MUST)
 
-The default project convention is a smoke harness:
+Smoke tests follow `godot-gdscript-patterns` § Testing GDScript — the canonical harness:
 
 - `tests/smoke_<feature>.tscn` — root Node with a script attached. You MUST omit `uid="..."` from the `[gd_scene format=3]` header (Godot regenerates on first scan; hand-authored UIDs leave parent `ext_resource` references stale).
-- `tests/smoke_<feature>.gd` — script with `_test_*` functions called via `_safe_run("name", _test_method)` from `_ready`, then `get_tree().quit()`. Each `_test_*` uses `assert(cond, message)`.
+- `tests/smoke_<feature>.gd` — `extends SmokeHarness`; `_tests()` returns `[[label, Callable], ...]`; each `_test_*` calls `_check(cond, message)`.
 
-If the project does NOT follow this pattern (no `tests/` dir, different framework), you MUST ask the user via `AskUserQuestion` rather than assuming.
+If the project already has its own harness, follow it. If it has none, Step 7 copies the skill's bundled harness in. If the project uses a different framework entirely (e.g. GUT), you MUST ask the user via `AskUserQuestion` rather than assuming.
 
 You MUST draft the assertion list — what observable end state proves the feature works.
 
@@ -168,7 +168,8 @@ Anticipate edge-case categories (boundary values, save/load roundtrip, signal or
 You MUST create:
 
 - `tests/smoke_<feature>.tscn` — root Node with the script attached, no hand-authored `uid`.
-- `tests/smoke_<feature>.gd` — script with `_test_*` functions. Tests MUST fail until Phase 3 codes the feature. That is the TDD red state.
+- `tests/smoke_<feature>.gd` — `SmokeHarness` subclass with `_test_*` functions. Tests MUST fail until Phase 3 codes the feature — red means `CHECK FAILED` lines, not a parse error. That is the TDD red state.
+- **Project has no harness yet** → also copy the skill's `assets/smoke_harness.gd` to `scripts/tests/helpers/` and `assets/run_smoke.sh` to `tools/`.
 
 #### B. Plan file
 
@@ -203,12 +204,12 @@ Plan template:
 ## Test specification
 - Smoke harness: `tests/smoke_<feature>.tscn` + `.gd` (failing versions already written)
 - Test cases:
-  - `_test_<X>()` — asserts <end state>
+  - `_test_<X>()` — checks <end state>
 - Edge cases (user-confirmed):
   - <edge> — covered by `_test_<Y>()`
 
 ## Implementation sequencing
-<order; deferrals via call_deferred or signals; new class_name → launch_editor refresh required>
+<order; deferrals via call_deferred or signals; new class_name → runner needs new_class_name: true>
 
 ## Risks + mitigations
 - <risk> — detect via <signal/log/assertion>; mitigate by <approach>
@@ -228,11 +229,11 @@ These apply to the test files you write and you MUST reflect them in the plan so
 - **Don't shadow GDScript built-ins** as locals: `seed`, `name` (on Node subclasses), `range`, `pi`, `tau`. Default-rename to `entry_seed`, `entry_name`, `attack_range`. Symptom is cryptic `Cannot find member "..." in base "Callable"` parse errors.
 - **`_ready` fires bottom-up.** Child `_ready` runs before parent `@onready` resolves. If a child's `_ready` calls into a parent method that derefs `@onready`, plan `call_deferred()` and add an inline comment naming the failure mode.
 - **CanvasLayer for overlays.** HUDs/modals/toasts in a scene that activates a `Camera2D` MUST root on `CanvasLayer` (or be wrapped in one) — layer-0 Controls drift with `canvas_transform`.
-- **New `class_name` → `launch_editor` refresh** required by the implementer before `run_project` resolves the type. Note in the plan if applicable.
+- **New `class_name` → class-registry refresh** before the smoke can resolve the type; the runner does it when passed `new_class_name: true`. Note in the plan if applicable.
 - **Don't hand-author `.tscn` UIDs** for new files. Godot regenerates on first scan; parent `ext_resource` references go stale.
 - **Debug grants need `if OS.is_debug_build():`** for any keyboard handler that mutates inventory / currency / XP / progression — guard so they never ship.
 - **Action-coupled warnings at the action site only**, not on review/inspection screens.
-- **`assert()` halts the smoke harness** — first failure stops every later test in the same file. Order tests so foundational asserts come first.
+- **`_check()` doesn't halt; `assert()` does.** New smokes use `_check()` so every test reports. In a legacy `assert()` smoke, order foundational asserts first — the first failure stops the file.
 
 ### Step 8 — Hand off to the user (MUST)
 
@@ -275,7 +276,7 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. **You o
    ```
 
 2. The implementer returns one of two statuses:
-   - `Status: smoke-ready` — it coded a pass; the handoff carries the smoke params (`smoke_scene`, `log_path`, `new_class_name`), any additional smokes, files changed, and deviations.
+   - `Status: smoke-ready` — it coded a pass; the handoff carries the smoke params (`smoke_scene`, `new_class_name`, and `log_path` for legacy log-file smokes only), any additional smokes, files changed, and deviations.
    - `Status: escalation` — a test-boundary / stale-assert / plan / scope concern. You MUST relay it verbatim and wait for user direction (see escalation rule below). Do NOT advance or auto-resolve.
 
 3. On `smoke-ready`, run each reported smoke via `godot-smoke-runner` — one spawn per scene:
@@ -284,11 +285,11 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. **You o
    Agent({
      description: "Run <smoke slug>",
      subagent_type: "godot-smoke-runner",
-     prompt: "Run <smoke_scene>. Log: <log_path>. new_class_name: <true|false>."
+     prompt: "Run <smoke_scene>. new_class_name: <true|false>.[ Log: <log_path> — legacy log-file smokes only]"
    })
    ```
 
-   You MUST NOT run the engine yourself (`mcp__godot__run_project` / `get_debug_output` / `stop_project`) — the runner absorbs the verbose engine output so your context stays lean across iterations. The runner returns a JSON block with `status` (`pass` / `fail` / `compilation-error`), a `failures` list, and a 1-line `summary`.
+   You MUST NOT run the engine yourself (`mcp__godot__run_project` / `get_debug_output` / `stop_project`, or `tools/run_smoke.sh`) — the runner absorbs the verbose engine output so your context stays lean across iterations. The runner returns a JSON block with `status` (`pass` / `fail` / `compilation-error`), a `failures` list, and a 1-line `summary`.
 
 4. Act on the runner's result:
    - `pass` (all reported smokes green) → surface the implementer's report + the green smoke summaries verbatim, update the progress block (`Last checkpoint: <date>`), advance to Phase 4.

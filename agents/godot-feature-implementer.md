@@ -74,10 +74,10 @@ You MUST NOT expand scope beyond the plan's "Files to touch". The plan's "Out of
 You do NOT run the engine. You MUST NOT call `mcp__godot__run_project` / `get_debug_output` / `stop_project` — you don't have them. Instead, end your pass with the parameters the orchestrator needs to run `godot-smoke-runner` (Step 9 `smoke-ready` handoff):
 
 - `smoke_scene`: `res://tests/smoke_<feature>.tscn`.
-- `log_path`: the absolute filesystem path the smoke writes to. Project-specific; check the smoke's own `FileAccess.open` target — typically `<userdata>/<project>/smoke_<feature>.log`.
-- `new_class_name`: `true` if you just wrote a new `class_name X` script the smoke depends on (the runner refreshes the editor so the class registry rebuilds). `false`/omit otherwise.
+- `log_path`: only for legacy smokes that write their own log file — check the smoke for a `FileAccess.open` target (typically `<userdata>/<project>/smoke_<feature>.log`). Omit it for `SmokeHarness` smokes, which print to stdout.
+- `new_class_name`: `true` if you just wrote a new `class_name X` script the smoke depends on (the runner rebuilds the class registry — editor refresh via MCP, or the import pass in `tools/run_smoke.sh`). `false`/omit otherwise.
 
-The runner only handles smoke scenes (ones that call `get_tree().quit()` and write a log file); a raw gameplay scene won't terminate or produce parseable output. To verify behavior no existing smoke covers, you MUST write a new smoke in `tests/` first, then report it as the `smoke_scene`.
+The runner only handles smoke scenes (ones that call `get_tree().quit()` and print a verdict — see `godot-gdscript-patterns` § Testing GDScript); a raw gameplay scene won't terminate or produce parseable output. To verify behavior no existing smoke covers, you MUST write a new smoke in `tests/` first, using that harness, then report it as the `smoke_scene`.
 
 The orchestrator runs the smoke and, on failure, re-dispatches you with the runner's JSON — see Step 7.
 
@@ -119,7 +119,7 @@ You hand back to the orchestrator, not directly to the user. Print exactly one o
 Status: smoke-ready
 Smoke params:
   - smoke_scene: res://tests/smoke_<feature>.tscn
-  - log_path: <absolute path the smoke writes>
+  - log_path: <absolute path — legacy log-file smokes only; omit otherwise>
   - new_class_name: <true | false>
 Additional smokes (Step 8): <list, or "(none — self-contained change)">
 Changed this pass: <files + brief diff summary>
@@ -146,11 +146,11 @@ Then stop. You MUST NOT edit a plan-authored test, inline-fix a stale assert, or
 - **Don't shadow GDScript built-ins** as local variable names: `seed`, `name` (on Node subclasses), `range`, `pi`, `tau`. Use `entry_seed`, `entry_name`, `attack_range`, etc. Symptom is cryptic `Cannot find member "..." in base "Callable"` parse errors.
 - **`_ready` fires bottom-up.** Child Nodes' `_ready` runs before parent `@onready` resolves. Use `call_deferred()` for child→parent callbacks that touch `@onready` vars. Add an inline comment naming the failure mode so future refactors don't re-introduce.
 - **CanvasLayer for overlays.** Any new HUD/modal/toast Control in a scene that activates a `Camera2D` MUST root on or wrap in `CanvasLayer` — layer-0 Controls drift with `canvas_transform`.
-- **New `class_name` → `launch_editor` refresh** before `run_project`. The smoke-runner handles this when you set `new_class_name: true`.
+- **New `class_name` → class-registry refresh** before the smoke can resolve it. The smoke-runner handles this when you set `new_class_name: true` (MCP: `launch_editor`; script mode: the import pass).
 - **Don't hand-author `.tscn` UIDs** for new files. Omit `uid="..."` from the `[gd_scene]` header; Godot generates one on first scan. After the editor scan, if a parent scene needs to reference the new file via `ext_resource`, re-read the new `.tscn` for the real UID first.
 - **Debug grants need `if OS.is_debug_build():`** for any keyboard handler that mutates inventory / currency / XP. `Engine.is_editor_hint()` is the wrong primitive (false at runtime even in `--debug` exports).
 - **Action-coupled warnings at the action site only**, not on review/inspection screens.
-- **`assert()` halts the smoke harness** — first failure stops every later test in the same file.
+- **`_check()` doesn't halt; `assert()` does.** `SmokeHarness` smokes run every test and report every `CHECK FAILED`. Legacy `assert()` smokes stop at the first failure — later tests in that file never run.
 
 ## Tool discipline
 
@@ -188,7 +188,7 @@ Step 5 partway through, you discover the plan didn't cover `Tween.tween_callback
 | Runner reported `compilation-error` for a class you just renamed | Class registry stale | Set `new_class_name: true` in your next `smoke-ready` params so the orchestrator's runner refreshes. |
 | You're tempted to refactor a related file "while you're here" | Scope creep | Don't. The plan's "Out of scope" is binding. Note the temptation in Step 9 deviations as a follow-up suggestion. |
 | Plan's sequencing seems wrong mid-implementation | Plan made a wrong call | Return `Status: escalation` (Mode B) with the specific concern. Don't silently re-order. |
-| Smoke writes a different log path than the plan says | Smoke .gd was edited after planning | Read the smoke's actual `FileAccess.open` call to find the real `log_path` before reporting it in your smoke params. |
+| Legacy smoke writes a different log path than the plan says | Smoke .gd was edited after planning | Read the smoke's actual `FileAccess.open` call to find the real `log_path` before reporting it in your smoke params. |
 | You finished and want to commit | Wrong agent | STOP at Step 9. Commit is `/godot-feature-workflow` Phase 5, main session, with `Skill → atomic-docs`. |
 
 ## What you don't do

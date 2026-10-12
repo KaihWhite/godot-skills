@@ -25,7 +25,7 @@ godot-skills/
 
 | Name | When it fires |
 | --- | --- |
-| `godot-gdscript-patterns` | Writing, reviewing, or designing GDScript in Godot 4 — nodes/scenes/resources, signals, autoloads, state machines, component patterns, refactors, perf. Skipped for non-code work and feature orchestration. |
+| `godot-gdscript-patterns` | Designing, planning, writing, testing, or reviewing GDScript in Godot 4, in any workflow — nodes/scenes/resources, signals, autoloads, state machines, component patterns, refactors, perf. Ships the canonical smoke harness (`assets/smoke_harness.gd` + `assets/run_smoke.sh`). Skipped for non-code work. |
 
 ### Slash commands
 
@@ -39,7 +39,7 @@ godot-skills/
 | Agent | Role |
 | --- | --- |
 | `godot-feature-implementer` | Phase 3 of `/godot-feature-workflow`. Codes one pass per dispatch against the plan; the orchestrator runs `godot-smoke-runner` and loops failures back until smoke tests are green. |
-| `godot-smoke-runner` | Runs ONE smoke scene per invocation; returns a JSON failure summary. Absorbs verbose engine output so the caller's context stays lean. Dispatched by the orchestrator during Phase 3. |
+| `godot-smoke-runner` | Runs ONE smoke scene per invocation; returns a JSON failure summary. Absorbs verbose engine output so the caller's context stays lean. Uses the Godot MCP when available, else `tools/run_smoke.sh`. Dispatched by any orchestrating session (e.g. `/godot-feature-workflow` Phase 3). |
 | `godot-auditor` | Project-wide quality + doc-drift sweep for milestone-close. Walks every `class_name`, autoload, and public symbol. Not for per-task work. |
 
 ## Install
