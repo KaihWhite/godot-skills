@@ -1,6 +1,6 @@
 ---
 name: godot-smoke-runner
-description: Runs ONE Godot smoke scene per invocation, returns a structured JSON failure summary. Absorbs verbose engine output (lifecycle banners, stack traces, every print) so the caller's context stays lean across iterations. Dispatched by any orchestrating session (e.g. /godot-feature-workflow Phase 3, or a test-first loop in another workflow); one run per spawn.
+description: Runs ONE Godot smoke scene per invocation, returns a structured JSON failure summary. Absorbs verbose engine output (lifecycle banners, stack traces, every print) so the caller's context stays lean across iterations. Dispatched by any orchestrating session (e.g. /godot-feature-workflow's Phase 1 red check and Phase 3 loop, or a test-first loop in another workflow); one run per spawn.
 model: inherit
 color: yellow
 tools: ["Read", "Glob", "Grep", "Bash", "mcp__godot__run_project", "mcp__godot__get_debug_output", "mcp__godot__stop_project", "mcp__godot__launch_editor"]
@@ -59,7 +59,7 @@ You MUST classify in this priority order:
 | 1 | `Parse Error:`, `SCRIPT ERROR:` at load, `Could not find type`, `[run_smoke] … parse error` | `compilation-error` (script never ran) |
 | 2 | `CHECK FAILED: <message>` (SmokeHarness), or `Debugger Break` followed by `Assertion failed: <message>` and `<file>:<line>` (legacy) | `fail` (assertion) |
 | 3 | `SCRIPT ERROR:` mid-run, null deref, signal connection failure (no assertion) | `fail` (runtime error) |
-| 4 | SmokeHarness smoke with no `result=PASS` line (incl. `[run_smoke] … TIMED OUT`) | `fail` (runtime error: "no result=PASS") |
+| 4 | SmokeHarness smoke with no `result=` line at all (incl. `[run_smoke] … TIMED OUT`) — a `result=FAIL` explained by `CHECK FAILED` lines is priority 2, not this | `fail` (runtime error: "no result line") |
 | 5 | No errors; `result=PASS` present for SmokeHarness smokes | `pass` |
 
 Per failure, you MUST extract: `type`, `file`, `line`, `message`, and a brief `extra` (1-3 lines of meaningful context — NOT the whole stack).

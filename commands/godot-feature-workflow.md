@@ -14,8 +14,10 @@ You (the main agent) do the planning yourself in Phase 1 — there is no separat
 The pipeline:
 
 ```
-Phase 1:   YOU plan (orient → ask design questions inline → patterns skill
-           → verify API claims via Explore sub-agents → write plan + failing smokes)
+Phase 1:   YOU plan (orient → patterns skill → Round 1: write back understanding
+           + choose approach → Round 2: design + edge questions → verify API claims
+           via Explore sub-agents → write plan + stubs + failing smokes
+           → self-review → red check via godot-smoke-runner)
                                                  ↓
 Phase 2:   (user reviews plan) ──────────────────┐
                                                  ↓
@@ -78,6 +80,7 @@ You MUST perform these steps in order before doing any planning:
    - Current phase: <number — name>
    - Inquiry rounds: <count, default 0>
    - Doc verification: <verified via Explore (N claims) | n/a — no engine API surface>
+   - Red check: <clean — N/N tests CHECK FAILED | pending>
    - Last checkpoint: <ISO date or "—">
    - Notes: <free-form, e.g. "user requested edge case X">
    ```
@@ -87,13 +90,15 @@ You MUST perform these steps in order before doing any planning:
 
 ## Phase 1 — Planning (MUST when entry phase = 1)
 
-You plan the feature yourself, in this session. The output is a plan file plus failing smoke tests. You MUST NOT touch implementation code or run the engine in this phase — that is Phase 3's job. Work the steps in order.
+You plan the feature yourself, in this session. The output is a plan file, failing smoke tests, and the interface stubs those smokes need to parse — with the red state confirmed by an actual smoke run. You MUST NOT write feature behavior in this phase — stubs carry signatures only (Step 8B), and behavior is Phase 3's job. You MUST NOT run the engine yourself; the one engine run in this phase is the Step 10 red check, dispatched to `godot-smoke-runner`. Work the steps in order.
 
 Because you are at main-agent depth, `AskUserQuestion` is reliable here: when you hit a genuine design ambiguity, ask the user directly and keep going with the answer in hand. There is no inquiry handoff and no restart — the whole point of planning in-session is that a question costs you a roundtrip, not your accumulated context.
 
+Phase 1 has exactly two planned inquiry rounds: Round 1 (Step 3) confirms what you're building and how; Round 2 (Step 4) resolves the details of that approach. Questions in Round 2 often depend on the approach chosen in Round 1 — that is why they are separate.
+
 ### Step 1 — Orient (MUST)
 
-The project docs are the source of truth for design intent, conventions, and architecture — you plan *against* them, not just alongside them. Read to absorb what the project has already decided, not to tick a box: a convention you skim past here becomes a wrong assumption baked into the plan, and the patterns skill (Step 3) and Godot docs (Step 4) confirm the *generic* answer, never the project-specific one. You MUST read, in this order:
+The project docs are the source of truth for design intent, conventions, and architecture — you plan *against* them, not just alongside them. Read to absorb what the project has already decided, not to tick a box: a convention you skim past here becomes a wrong assumption baked into the plan, and the patterns skill (Step 2) and Godot docs (Step 5) confirm the *generic* answer, never the project-specific one. You MUST read, in this order:
 
 1. The project's `CLAUDE.md` (root) — points to design docs, vault paths, implementation plan, active deviations file.
 2. The design scratchpad if one exists (e.g. `<vault>/design/Thoughts.md`). This is **read-only**.
@@ -102,23 +107,49 @@ The project docs are the source of truth for design intent, conventions, and arc
 
 You SHOULD NOT speculatively read the entire source tree — only files the task names or that the design notes flag as touched.
 
-Reconcile the task against what you read. Where the request conflicts with a documented convention or an established design direction, that conflict is a Step 2 question — surface it; do not silently resolve it in the plan's favor or the doc's.
+Reconcile the task against what you read. Where the request conflicts with a documented convention or an established design direction, that conflict MUST be surfaced in Step 3 — do not silently resolve it in the plan's favor or the doc's.
 
-### Step 2 — Resolve design questions inline (MUST)
+### Step 2 — Consult patterns skill (MUST)
 
-You MUST identify 2-4 genuine ambiguities. Decisions to ask about typically include: mechanical timing, threshold values, UI placement, persistence boundaries, error behavior, schema boundaries, a conflict between the request and a documented convention — anything the design doc deliberately defers or where you can name 2+ reasonable answers.
+You MUST invoke `Skill → godot-gdscript-patterns` BEFORE proposing approaches, not at exit — the candidate approaches in Step 3 are built from these patterns. From the skill output, identify which patterns are candidates (state machine, signals, scene composition, resources, object pool, etc.). The final Apply / Skip lists go into the plan once Step 3 settles the approach.
 
-For any ambiguity NOT already resolved in `$ARGUMENTS` or earlier in the conversation, you MUST ask the user via `AskUserQuestion` — neutral options, honest tradeoffs, one option labeled "(Recommended)" only when there is strong reason. Ask before drafting the plan; bundle Step 6 edge-case prompts into the same roundtrip so one set of questions resolves both (see Step 6). Increment `Inquiry rounds` in the progress block after each roundtrip.
+### Step 3 — Round 1: write back understanding + propose approaches (MUST)
+
+Send ONE message containing the write-back as text, followed by an `AskUserQuestion` for the approach choice. Increment `Inquiry rounds` afterwards.
+
+**A. Write back your understanding.** A short note the user can assess and correct:
+
+- **Outcome** — what the feature does, in player- or developer-observable terms.
+- **Success criteria** — the observable end states that prove it works. These become the Step 6 assertion list, so make them concrete.
+- **Constraints** — from CLAUDE.md / design notes, with the note named.
+- **Said vs. assumed** — separate what the user stated from what you inferred. Every inference is a correction opportunity; list it.
+- **Conflicts** — any request-vs-documented-convention conflict found in Step 1.
+
+When `$ARGUMENTS` and the docs already supply the purpose and constraints, reflect them back rather than re-asking — keep the note concise. The user corrects via the question's notes or "Other"; you MUST incorporate any correction before Round 2.
+
+**B. Propose 2-3 approaches.** Always — even when one looks obvious. Each approach is a distinct architecture (e.g. component node vs. autoload service vs. Resource-driven data; signals vs. direct calls across a boundary), not a variation in values:
+
+- Lead with your recommendation, labeled "(Recommended)", and say why in one line.
+- Give honest tradeoffs for each: fit with project conventions, testability as a smoke, scene/signal coupling, persistence impact.
+- Use `AskUserQuestion` option `preview`s for a scene-tree sketch or key signatures when that makes the difference clearer than prose.
+- Alternatives MUST be credible — something a competent Godot developer might actually pick. When the project docs already fix the architecture, the documented approach is the recommendation and the alternatives show what it rules out; never pad with straw men to reach the count.
+- YAGNI: strip speculative extensibility from every approach.
+
+If the chosen approach rests on an engine behavior you haven't verified, you MAY dispatch a Step 5-style Explore check before Round 2 rather than building questions on a false premise.
+
+### Step 4 — Round 2: resolve design questions inline (MUST)
+
+With the approach settled, you MUST identify 2-4 genuine ambiguities in it. Decisions to ask about typically include: mechanical timing, threshold values, UI placement, persistence boundaries, error behavior, schema boundaries — anything the design doc deliberately defers or where you can name 2+ reasonable answers.
+
+For any ambiguity NOT already resolved in `$ARGUMENTS`, Round 1, or earlier in the conversation, you MUST ask the user via `AskUserQuestion` — neutral options, honest tradeoffs, one option labeled "(Recommended)" only when there is strong reason. Ask before drafting the plan; bundle Step 7 edge-case prompts into the same roundtrip so one set of questions resolves both (see Step 7). Increment `Inquiry rounds` in the progress block after the roundtrip.
 
 You MUST verify each question is genuinely open BEFORE asking. Sanity check: can you name 2+ reasonable answers without strain? If you find yourself constructing options to justify a preconceived constraint, the constraint IS the answer — lock it and document it in the plan body rather than asking. Manufactured questions (false constraints framed as "must resolve" choices) waste the user's time and signal over-engineering. Example that surfaced as a false constraint in a past run: "4→3 archetype mismatch must resolve" (it didn't — schemas can have different archetype counts).
 
 You MUST NOT lock a user-decidable decision silently. If you catch yourself rationalizing "the user probably meant X" or "the prompt strongly hinted at Y so I'll lock it" on a choice with 2+ reasonable answers, that's an `AskUserQuestion`, not a lock. Decisions you do lock by your own inference (rather than a user answer) MUST be surfaced at the Phase 2 review as "inferred, not confirmed" so the user can override.
 
-### Step 3 — Consult patterns skill (MUST)
+If Round 1 answered everything and no genuine ambiguity remains, skip the Round 2 roundtrip and say so in the progress block `Notes` — do not manufacture questions to fill it.
 
-You MUST invoke `Skill → godot-gdscript-patterns` BEFORE drafting the plan, not at exit. From the skill output, identify which patterns apply (state machine, signals, scene composition, resources, object pool, etc.) and which you considered then rejected. Both lists go into the plan.
-
-### Step 4 — API verification via Explore sub-agents (MUST when applicable)
+### Step 5 — API verification via Explore sub-agents (MUST when applicable)
 
 You MUST list every Godot 4 class / signal / property / behavior the plan relies on. For each one you don't already know with cited in-codebase confidence, you MUST verify it against the official docs by dispatching a read-only `Explore` sub-agent — never by reading whole doc pages into your own context, and never by running the engine.
 
@@ -140,38 +171,51 @@ Dispatch discipline (keeps doc pages out of your context, returns trustworthy an
 - Name the likely doc path when you know it (e.g. `classes/class_characterbody2d.md`); let the Explore agent fall back to `get_documentation_tree` when you don't.
 - Demand conclusions, not excerpts — `confirmed / contradicted / not-found` plus a one-line doc reference. If an agent returns a doc dump, re-dispatch with a tighter cap rather than accepting it.
 - If a finding points at a second class worth checking, dispatch a follow-up wave rather than reasoning from a half-answer.
-- If a claim comes back `contradicted`, the design rests on a false premise — revise the plan (and re-open a Step 2 question if the correction is user-decidable) rather than papering over it.
+- If a claim comes back `contradicted`, the design rests on a false premise — revise the plan (and re-open a Step 3 or Step 4 question if the correction is user-decidable) rather than papering over it.
 
 Self-confidence is the same trap as silent locking: bias toward verifying. A claim you confirm against the page costs one Explore dispatch; a wrong assumption buried in prose costs a re-plan. `known` claims backed by in-codebase evidence (specific function references, fallback chains, prior usage) do NOT need a dispatch — but you MUST cite that evidence in the plan. "Everything was in scope" without citations is not evidence; verify it.
 
 In the plan's `API references consulted` section, record each verified item: the class / signal / property, the doc path the Explore agent read (or the in-codebase citation for a `known` claim), and the fact confirmed. If the plan touches no Godot 4 API surface (e.g. a pure refactor of project-local code), write "(none — no engine API surface)" and set `Doc verification: n/a — no engine API surface` in the progress block.
 
-### Step 5 — Test design (MUST)
+### Step 6 — Test design (MUST)
 
 Smoke tests follow `godot-gdscript-patterns` § Testing GDScript — the canonical harness:
 
 - `tests/smoke_<feature>.tscn` — root Node with a script attached. You MUST omit `uid="..."` from the `[gd_scene format=3]` header (Godot regenerates on first scan; hand-authored UIDs leave parent `ext_resource` references stale).
 - `tests/smoke_<feature>.gd` — `extends SmokeHarness`; `_tests()` returns `[[label, Callable], ...]`; each `_test_*` calls `_check(cond, message)`.
 
-If the project already has its own harness, follow it. If it has none, Step 7 copies the skill's bundled harness in. If the project uses a different framework entirely (e.g. GUT), you MUST ask the user via `AskUserQuestion` rather than assuming.
+If the project already has its own harness, follow it. If it has none, Step 8 copies the skill's bundled harness in. If the project uses a different framework entirely (e.g. GUT), you MUST ask the user via `AskUserQuestion` rather than assuming.
 
-You MUST draft the assertion list — what observable end state proves the feature works.
+You MUST draft the assertion list — what observable end state proves the feature works — starting from the success criteria confirmed in Round 1. For each test, name the behavior that is missing today and would make it fail; a test you can't say that about pins existing behavior and either isn't needed or is a deliberate regression guard (mark it as one in the plan).
 
-### Step 6 — Edge-case integration (MUST)
+You MUST also list the **interface surface** the smokes touch that doesn't exist yet — every new `class_name`, method, signal, exported / public property, and preloaded scene, with exact typed signatures. These become the Step 8B stubs and the implementer's contract.
 
-Anticipate edge-case categories (boundary values, save/load roundtrip, signal ordering, multi-frame timing, error states, race conditions, large/empty inputs) at Step 2 inquiry time, so a single `AskUserQuestion` roundtrip resolves both design questions and edges. With the answers in hand, append confirmed edges to the test list. If a Step-5-emergent edge truly needs user input that Step 2 missed, you MAY ask one more roundtrip — but minimize this; one roundtrip is the goal.
+### Step 7 — Edge-case integration (MUST)
 
-### Step 7 — Write deliverables (MUST)
+Anticipate edge-case categories (boundary values, save/load roundtrip, signal ordering, multi-frame timing, error states, race conditions, large/empty inputs) at Step 4 inquiry time, so the Round 2 roundtrip resolves both design questions and edges. With the answers in hand, append confirmed edges to the test list. If a Step-6-emergent edge truly needs user input that Round 2 missed, you MAY ask one more roundtrip — but minimize this.
+
+### Step 8 — Write deliverables (MUST)
 
 #### A. Test files
 
 You MUST create:
 
 - `tests/smoke_<feature>.tscn` — root Node with the script attached, no hand-authored `uid`.
-- `tests/smoke_<feature>.gd` — `SmokeHarness` subclass with `_test_*` functions. Tests MUST fail until Phase 3 codes the feature — red means `CHECK FAILED` lines, not a parse error. That is the TDD red state.
+- `tests/smoke_<feature>.gd` — `SmokeHarness` subclass with `_test_*` functions. Tests MUST fail until Phase 3 codes the feature — red means `CHECK FAILED` lines, not a parse error. That is the TDD red state, and Step 10 proves it.
 - **Project has no harness yet** → also copy the skill's `assets/smoke_harness.gd` to `scripts/tests/helpers/` and `assets/run_smoke.sh` to `tools/`.
 
-#### B. Plan file
+#### B. Interface stubs
+
+A smoke that calls `WanderController.new()` before `WanderController` exists is a parse error, not a red. For every item on the Step 6 interface-surface list, you MUST write a signature-only stub so the smokes parse and fail on their checks:
+
+- **New script** — `class_name` + `extends`, typed method signatures exactly as the plan states them, bodies of `pass` or the return type's zero value (`false`, `0`, `0.0`, `""`, `null`, `[]`, `{}`), each marked `# STUB — Phase 3 implements`.
+- **New method on an existing script** — append the stub method only; nothing else in that file changes.
+- **Signals and exported / public properties** the smokes reference — declare them with their defaults. Never emit a signal or mutate state in a stub.
+- **New scene the smoke preloads** — a minimal `.tscn` (root node + stub script), no hand-authored `uid`.
+
+Stubs carry no behavior. If a stub body needs a branch, a loop, a signal emit, or a call into other project code to make the smoke parse, that's implementation — stop and restructure the smoke instead. Stubs are implementation files, not tests: the implementer owns and replaces them in Phase 3, and the plan-authored-test read-only rule does not apply to them.
+
+#### C. Plan file
 
 Path: `<cwd>/.claude/plans/<slug>-<YYYY-MM-DD>.md`. If `<cwd>/.claude/` doesn't exist, fall back to `<cwd>/plans/`, then `~/.claude/plans/`. Slug: lowercase-hyphenated, task ID + 1-3 keywords (e.g. `task-f46-wander-toggle-2026-05-06.md`).
 
@@ -188,6 +232,15 @@ Plan template:
 ## Goal
 <concise outcome>
 
+## Understanding (confirmed in Round 1)
+- Success criteria: <observable end states>
+- Constraints: <from which doc>
+- Assumptions: <each marked "confirmed" or "inferred, not confirmed">
+
+## Approach
+- Chosen: <approach> — <why; user's Round 1 answer>
+- Rejected: <approach> — <why not>
+
 ## Design decisions
 - <decision> — <reason from user's AskUserQuestion answer or design doc>
 
@@ -198,15 +251,19 @@ Plan template:
 ## API references consulted (via Explore + godot-docs MCP)
 - <class/signal/property> — <doc path read, or in-codebase citation for a `known` claim> — <fact confirmed>
 
+## Interface stubs (written in Phase 1 — implementer replaces)
+- `<path>` — <new file | stub appended to existing> — `<exact typed signature>`
+
 ## Files to touch
-- `<path>` — <new vs edit; what changes>
+- `<path>` — <new vs edit vs fill stub; what changes>
 
 ## Test specification
 - Smoke harness: `tests/smoke_<feature>.tscn` + `.gd` (failing versions already written)
 - Test cases:
-  - `_test_<X>()` — checks <end state>
+  - `_test_<X>()` — checks <end state> — fails today because <missing behavior>
 - Edge cases (user-confirmed):
   - <edge> — covered by `_test_<Y>()`
+- Red check: <date> — <N/N tests CHECK FAILED; runner summary>
 
 ## Implementation sequencing
 <order; deferrals via call_deferred or signals; new class_name → runner needs new_class_name: true>
@@ -223,29 +280,72 @@ Plan template:
 
 ### Critical Godot rules to encode in the plan (MUST)
 
-These apply to the test files you write and you MUST reflect them in the plan so the implementer follows them:
+These apply to the test files and stubs you write and you MUST reflect them in the plan so the implementer follows them:
 
 - **Skill is source of truth.** `godot-gdscript-patterns` wins over training intuition.
 - **Don't shadow GDScript built-ins** as locals: `seed`, `name` (on Node subclasses), `range`, `pi`, `tau`. Default-rename to `entry_seed`, `entry_name`, `attack_range`. Symptom is cryptic `Cannot find member "..." in base "Callable"` parse errors.
 - **`_ready` fires bottom-up.** Child `_ready` runs before parent `@onready` resolves. If a child's `_ready` calls into a parent method that derefs `@onready`, plan `call_deferred()` and add an inline comment naming the failure mode.
 - **CanvasLayer for overlays.** HUDs/modals/toasts in a scene that activates a `Camera2D` MUST root on `CanvasLayer` (or be wrapped in one) — layer-0 Controls drift with `canvas_transform`.
-- **New `class_name` → class-registry refresh** before the smoke can resolve the type; the runner does it when passed `new_class_name: true`. Note in the plan if applicable.
+- **New `class_name` → class-registry refresh** before the smoke can resolve the type; the runner does it when passed `new_class_name: true`. Stub `class_name`s are registered by the Step 10 red check, so Phase 3 only needs it for classes the implementer adds beyond the stubs.
 - **Don't hand-author `.tscn` UIDs** for new files. Godot regenerates on first scan; parent `ext_resource` references go stale.
 - **Debug grants need `if OS.is_debug_build():`** for any keyboard handler that mutates inventory / currency / XP / progression — guard so they never ship.
 - **Action-coupled warnings at the action site only**, not on review/inspection screens.
 - **`_check()` doesn't halt; `assert()` does.** New smokes use `_check()` so every test reports. In a legacy `assert()` smoke, order foundational asserts first — the first failure stops the file.
 
-### Step 8 — Hand off to the user (MUST)
+### Step 9 — Plan self-review (MUST)
 
-When the plan file and failing test files are written, you MUST surface to the user, in one message:
+Before the red check, re-read the plan, stubs, and smokes together with fresh eyes. This is a checklist you run yourself — not a sub-agent dispatch:
 
-- The plan path and the test file paths.
+1. **Coverage.** Every Round 1 success criterion, design decision, and confirmed edge case maps to a named `_test_*` — or is listed in `Out of scope`, or flagged "playtest-only" with the reason it can't be smoked. List any gaps and close them.
+2. **Placeholder scan.** No "TBD", "TODO", "handle edge cases", "add appropriate error handling", "similar to above", or a `Files to touch` entry that doesn't say what changes. Fix them.
+3. **Name and signature consistency.** Every class, method, signal, and property is spelled and typed identically across the plan, the stubs, and the smokes. Every symbol a smoke calls exists in a stub or in existing code (cite the file). A `get_wander()` in the smoke and a `get_wandering()` in the stub is a bug.
+4. **API coverage.** Every engine API named in `Files to touch`, `Implementation sequencing`, or the stubs appears in `API references consulted` (or is cited as `known`).
+5. **Approach fidelity.** `Pattern alignment` and `Files to touch` implement the approach chosen in Round 1, not one of the rejected ones.
+
+Fix issues inline — no need to re-review afterwards. If a fix changes a user-confirmed decision, that's a question for the user, not an inline fix.
+
+### Step 10 — Verify red (MUST)
+
+You MUST watch the smokes fail before handing off. A smoke that was never run hasn't been shown to test anything: it might parse-error, or pass against the stubs because it pins behavior that already exists.
+
+Dispatch one `godot-smoke-runner` per smoke scene. Pass `new_class_name: true` if the stubs added any `class_name`:
+
+```
+Agent({
+  description: "Red check <smoke slug>",
+  subagent_type: "godot-smoke-runner",
+  prompt: "Run <smoke_scene>. new_class_name: <true|false>. This is a pre-implementation red check — failures are expected."
+})
+```
+
+The red check passes only when the runner returns `status: fail` and:
+
+- every failure is `type: assertion` (`CHECK FAILED`) — no `compilation-error`, no `runtime-error`; and
+- every test case in the plan's `Test specification` appears among the failures, except ones the plan explicitly marks as regression guards.
+
+Act on anything else — you own the plan-authored tests and stubs in this phase, so fix them yourself:
+
+| Runner result | Meaning | Action |
+|---------------|---------|--------|
+| `compilation-error` | A smoke or stub doesn't parse, or a stub symbol is missing | Fix the smoke / stub (and re-run Step 9 check 3), re-dispatch |
+| `runtime-error` | A stub default (e.g. `null`) crashes the test before it reaches `_check` | Restructure the test to `_check` the precondition first (e.g. `_check(x != null, ...)` then return) — never put behavior in the stub |
+| A planned test missing from `failures` | It passes against the stubs — it pins behavior that already exists or a stub default happens to satisfy it | Tighten the assertion so it fails for the missing behavior, or mark it a regression guard in the plan with a reason |
+| `pass` | Nothing is red | The tests don't exercise the feature. Return to Step 6 |
+
+Cap at ~3 red-check iterations. If it still isn't a clean red, STOP and raise it to the user with the latest runner JSON. Record the result in the plan's `Red check` line and set `Red check:` in the progress block.
+
+### Step 11 — Hand off to the user (MUST)
+
+When the plan, stubs, and failing tests are written and the red check is clean, you MUST surface to the user, in one message:
+
+- The plan path, the test file paths, and the stub files.
+- The red-check result (which tests fail, and the runner's one-line summary).
 - The `API references consulted` section (so the user sees what was verified and against which doc pages).
-- Any design decision you locked by your own inference rather than a user answer, flagged "inferred, not confirmed."
+- Any design decision or assumption you locked by your own inference rather than a user answer, flagged "inferred, not confirmed."
 
-Then update the progress block (`Plan path`, `Smoke tests`, `Doc verification`, `Current phase: 2`) and advance to Phase 2. You MUST NOT continue into implementation.
+Then update the progress block (`Plan path`, `Smoke tests`, `Doc verification`, `Red check`, `Current phase: 2`) and advance to Phase 2. You MUST NOT continue into implementation.
 
-You SHOULD NOT re-plan from scratch more than twice in one session. If the user keeps adjusting, prefer a hand-edit to the plan file.
+You SHOULD NOT re-plan from scratch more than twice in one session. If the user keeps adjusting, prefer a hand-edit to the plan file — then re-run Steps 9-10 if the edit touched tests, stubs, or signatures.
 
 ## Phase 2 — User review checkpoint (MUST wait)
 
@@ -263,7 +363,7 @@ Ambiguous signals (e.g. user just asks a question about the plan) → answer the
 
 ## Phase 3 — Implementation (MUST when entry phase ≤ 3)
 
-The implementer codes ONE pass per dispatch and does NOT run the engine. **You own the code → smoke → fix loop:** dispatch the implementer, run `godot-smoke-runner` on the params it returns, hand any failure back to the implementer, repeat until the smoke passes.
+The implementer codes ONE pass per dispatch and does NOT run the engine. It starts from the Phase 1 stubs and the clean red check; its job is to replace every stub with behavior until the same smokes go green. **You own the code → smoke → fix loop:** dispatch the implementer, run `godot-smoke-runner` on the params it returns, hand any failure back to the implementer, repeat until the smoke passes.
 
 1. Dispatch the implementer with the plan path:
 
@@ -371,7 +471,7 @@ When `$ARGUMENTS == "resume"`:
 /godot-feature-workflow TASK-F62 raid multipliers
 ```
 
-Expected flow: Phase 0 classifies as task description → progress block written → Phase 1: you orient, ask design + edge questions via `AskUserQuestion`, consult the patterns skill, dispatch Explore sub-agents to verify the API claims, write the plan + failing smokes → Phase 2 checkpoint → user approves → Phase 3 dispatches implementer → checkpoint → user verifies → Phase 5 atomic-docs.
+Expected flow: Phase 0 classifies as task description → progress block written → Phase 1: you orient, consult the patterns skill, write back your understanding and offer 2-3 approaches (Round 1), ask design + edge questions for the chosen approach (Round 2), dispatch Explore sub-agents to verify the API claims, write the plan + interface stubs + failing smokes, self-review, confirm red via `godot-smoke-runner` → Phase 2 checkpoint → user approves → Phase 3 dispatches implementer → checkpoint → user verifies → Phase 5 atomic-docs.
 
 ### Example 2 — Plan already exists
 
@@ -410,8 +510,12 @@ These thoughts mean you're about to rationalize the SOP away:
 | "Smoke is green-ish; close enough." | If a `_test_*` isn't asserting green, iterate or escalate. No partial passes. |
 | "User got impatient — I'll skip ahead." | Phase 0 selects the entry phase. Impatience isn't a re-route signal; only scope changes are. |
 | "I read the SOP earlier; I remember the rules." | Skills evolve. Re-load the skill before acting; don't recall from memory. |
-| "I can answer the design questions myself from conversation context." | If a choice has 2+ reasonable answers, the user decides. Use `AskUserQuestion` at Step 2; don't substitute your judgment for theirs. |
-| "The prompt strongly hinted at X, so I'll lock it in the plan." | A user-decidable choice is a Step 2 question, not a silent lock. If you must infer, flag it "inferred, not confirmed" at Phase 2. |
+| "I can answer the design questions myself from conversation context." | If a choice has 2+ reasonable answers, the user decides. Use `AskUserQuestion` in Round 1 or Round 2 (Steps 3-4); don't substitute your judgment for theirs. |
+| "The prompt strongly hinted at X, so I'll lock it in the plan." | A user-decidable choice is a Step 3 or Step 4 question, not a silent lock. If you must infer, flag it "inferred, not confirmed" at Phase 2. |
+| "Only one approach makes sense here — skip the alternatives." | Step 3 always offers 2-3 credible approaches. If the docs dictate one, recommend it and show what it rules out — the user confirms. |
+| "The smokes obviously fail — no need to run them before handoff." | A smoke you never watched fail may parse-error or pass against the stubs. Step 10 is mandatory. |
+| "I'll fill in this stub while I'm here — it's one line." | Stubs carry signatures only. Behavior in Phase 1 means the smoke never proved it can fail. |
+| "Self-review is a formality — I just wrote this." | Step 9 catches the name drift and coverage gaps that otherwise surface as Phase 3 escalations. Run the checklist. |
 | "I'll just read the doc page myself to verify this API." | Phase 1 verification is delegated to Explore sub-agents — conclusions only, doc pages stay out of your context. Dispatch, don't read whole pages. |
 
 If any of these thoughts appear, STOP, return to the user, and re-state the current phase.
@@ -420,7 +524,10 @@ If any of these thoughts appear, STOP, return to the user, and re-state the curr
 
 | Symptom | Likely cause | Action |
 |---------|--------------|--------|
-| You asked no design questions | Task is well-specified, or you skipped Step 2 | Re-check Step 2: can you name 2+ reasonable answers to any open decision? If the plan is thin on edge cases, ask before writing it. |
+| You asked no design questions | Task is well-specified, or you skipped Step 4 | Re-check Step 4: can you name 2+ reasonable answers to any open decision? If the plan is thin on edge cases, ask before writing it. |
+| User's Round 1 correction changes the outcome or success criteria | Your write-back missed intent | Update the understanding, re-offer approaches if the correction invalidates them, then go to Round 2. Don't carry Round 2 questions written for the old understanding. |
+| Red check returns `compilation-error` for a stub `class_name` | Class registry not refreshed | Re-dispatch the runner with `new_class_name: true`. |
+| Red check keeps returning a planned test as passing | The assertion pins existing behavior or a stub default | Tighten the assertion to the missing behavior, or mark it a regression guard in the plan with a reason — don't put behavior in the stub. |
 | An Explore agent returns a huge doc dump | Prompt didn't cap the response | Re-dispatch with "report conclusions only — confirmed / contradicted / not-found + one-line doc reference, no excerpts". |
 | Smoke passes but user playtest disagrees | Smoke covers the wrong assertion | Have the implementer add a failing smoke test that captures the user's case (Phase 3 fold-back), then re-run the loop. |
 | `Skill → atomic-docs` reports drift in unrelated notes | Earlier work left stale references | Resolve those before committing — do not bypass the drift grep. |

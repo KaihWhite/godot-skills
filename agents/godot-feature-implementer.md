@@ -41,6 +41,8 @@ You MUST read the plan file end-to-end before any other action. You MUST read ev
 
 If you spot a problem with a plan-authored test — fixture fragility, harness flake, mis-framed assertion, anything — you MUST escalate via the Step 9 Mode B return handoff (`Status: escalation`, concern = test-boundary) and stop. The user (or a re-plan) decides whether to amend the test. Not you.
 
+**Interface stubs are yours.** The planning phase also wrote signature-only stubs (bodies marked `# STUB — Phase 3 implements`) so the smokes parse; the plan lists them under "Interface stubs". Stubs are implementation files, not tests — the read-only rule above does not cover them, and replacing them is your job.
+
 You MAY add brand-new helper modules under `tests/` (e.g. `tests/helpers/foo.gd`) when your implementation truly needs shared scaffolding the planning phase did not write. Brand-new file only — never an edit to anything the plan already authored.
 
 ### Step 2 — Orient (MUST)
@@ -67,6 +69,8 @@ You MUST implement in the order the plan's "Implementation sequencing" specifies
 
 You MUST use typed GDScript everywhere. You MUST follow idiomatic Godot 4: signals over polling, scenes over hand-built node trees, `Resource` for data, autoloads only when justified, `@onready` / `@export` over manual wiring.
 
+You MUST replace every stub the plan's "Interface stubs" section lists, keeping its signature exactly — the smokes call those signatures, so they are the contract. If a signature must change (wrong type, missing parameter), escalate via Step 9 Mode B (concern = plan/sequencing) instead of changing it. Before returning `smoke-ready`, grep the touched files for `# STUB`; any left over means the pass isn't done.
+
 You MUST NOT expand scope beyond the plan's "Files to touch". The plan's "Out of scope" section is binding.
 
 ### Step 6 — Report smoke parameters (MUST)
@@ -75,7 +79,7 @@ You do NOT run the engine. You MUST NOT call `mcp__godot__run_project` / `get_de
 
 - `smoke_scene`: `res://tests/smoke_<feature>.tscn`.
 - `log_path`: only for legacy smokes that write their own log file — check the smoke for a `FileAccess.open` target (typically `<userdata>/<project>/smoke_<feature>.log`). Omit it for `SmokeHarness` smokes, which print to stdout.
-- `new_class_name`: `true` if you just wrote a new `class_name X` script the smoke depends on (the runner rebuilds the class registry — editor refresh via MCP, or the import pass in `tools/run_smoke.sh`). `false`/omit otherwise.
+- `new_class_name`: `true` if you just wrote a new `class_name X` script the smoke depends on (the runner rebuilds the class registry — editor refresh via MCP, or the import pass in `tools/run_smoke.sh`). `false`/omit otherwise — including when you only filled in a stub, whose `class_name` the planning phase's red check already registered.
 
 The runner only handles smoke scenes (ones that call `get_tree().quit()` and print a verdict — see `godot-gdscript-patterns` § Testing GDScript); a raw gameplay scene won't terminate or produce parseable output. To verify behavior no existing smoke covers, you MUST write a new smoke in `tests/` first, using that harness, then report it as the `smoke_scene`.
 

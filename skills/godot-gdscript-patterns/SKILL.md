@@ -196,6 +196,8 @@ Engine output is verbose. If your environment provides a smoke-runner sub-agent,
 ### TDD notes
 
 - **Valid red = a `CHECK FAILED:` line.** A parse error or missing-type error means the test never ran — fix that before calling it red.
+- **Testing code that doesn't exist yet?** Write signature-only stubs first — `class_name`, typed method signatures, bodies of `pass` or the return type's zero value — so the smoke parses and fails on its checks. No behavior in a stub.
+- **Run the smoke before writing the code.** A test you never watched fail may be testing behavior that already exists.
 - One smoke scene per feature; name tests after the behaviour they pin (`rejects_when_full`, not `test3`).
 - Legacy smokes using `assert()` halt at the first failure; later tests in that file never run.
 
