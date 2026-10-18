@@ -9,6 +9,9 @@ godot-skills/
 ├── skills/
 │   └── godot-gdscript-patterns/
 │       ├── SKILL.md
+│       ├── assets/
+│       │   ├── smoke_harness.gd
+│       │   └── run_smoke.sh
 │       └── references/advanced-patterns.md
 ├── commands/
 │   ├── godot-audit.md

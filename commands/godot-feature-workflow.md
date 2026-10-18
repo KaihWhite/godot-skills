@@ -44,7 +44,7 @@ API doc verification happens during your planning (Phase 1) via read-only `Explo
 Accepted forms:
 
 - **Task ID / description** — e.g. `TASK-F62 raid multipliers` or `add per-skeleton wander toggle`. Starts at Phase 1.
-- **Plan path** — e.g. `.claude/plans/wander-toggle-2026-05-06.md` (absolute or relative). Skips Phase 1, starts at Phase 3.
+- **Plan path** — e.g. `.claude/plans/wander-toggle-2026-05-06.md` (absolute or relative). Skips Phase 1 planning, but runs the plan intake (Phase 0 step 6) before Phase 3.
 - **`resume`** — Reads the most recent SOP-progress block (see Progress Tracking) and re-enters at the recorded phase.
 - **Empty** — You MUST ask the user one clarifying question to determine the task before proceeding. Do not guess.
 
@@ -74,7 +74,7 @@ You MUST perform these steps in order before doing any planning:
    ## SOP progress — godot-feature-workflow
 
    - Task: <one-line description>
-   - Entry phase: <1 | 3 | 5>
+   - Entry phase: <1 | 3 | 3 (after plan intake) | 5>
    - Plan path: <path or "(pending — Phase 1 will create)">
    - Smoke tests: <paths or "(pending)">
    - Current phase: <number — name>
@@ -87,6 +87,10 @@ You MUST perform these steps in order before doing any planning:
 
 4. You SHOULD also create a TaskCreate entry per remaining phase (1, 3, 5 — checkpoints 2 and 4 belong to the user, not you), and mark them `in_progress` / `completed` as you advance. This is the canonical resumption signal.
 5. You MUST NOT skip ahead to a later phase than the one Phase 0 selects, even if the user is impatient — re-route via Phase 0 if scope changes.
+6. **Plan intake (MUST when `$ARGUMENTS` is a plan path).** A plan you didn't just write has never been red-checked by this session — it may predate the red check, have been hand-edited, or have tests that changed since. Read the plan and its smokes, then:
+   - **No smoke tests** → it isn't a workflow plan. Treat it as the task description and enter at Phase 1; the plan is input to Step 1, and Round 1 reflects it back.
+   - **Smokes exist** → run Phase 1 Step 8B (write any missing stubs — when the plan has no `Interface stubs` section, derive the interface surface from what the smokes call), Step 9 (self-review), and Step 10 (red check). Always, even when the plan already records a clean `Red check` — one runner spawn per smoke is cheap next to implementing against tests that can't fail.
+   - If intake changed only stubs and the `Red check` line → set `Entry phase: 3 (after plan intake)` and continue to Phase 3. If it changed tests, signatures, or plan content, or the red check shows tests already passing (implementation may already exist) → stop at the Phase 2 checkpoint and say what changed.
 
 ## Phase 1 — Planning (MUST when entry phase = 1)
 
@@ -219,7 +223,7 @@ Stubs carry no behavior. If a stub body needs a branch, a loop, a signal emit, o
 
 Path: `<cwd>/.claude/plans/<slug>-<YYYY-MM-DD>.md`. If `<cwd>/.claude/` doesn't exist, fall back to `<cwd>/plans/`, then `~/.claude/plans/`. Slug: lowercase-hyphenated, task ID + 1-3 keywords (e.g. `task-f46-wander-toggle-2026-05-06.md`).
 
-**Archive policy (MUST when re-writing a plan for the same task).** When you produce v2+ of a plan (a prior version exists at the active path), you MUST archive the prior version to `<cwd>/.claude/plans/archive/<slug>-<prior-date>-v<N>.md` before writing the new plan. Use today's date in the new filename if the prior version was written on a different day. NEVER overwrite an active plan in place — the archive preserves history for the user and for resumability.
+**Archive policy (MUST when re-writing a plan for the same task).** When you produce v2+ of a plan (a prior version exists at the active path), you MUST archive the prior version to `<cwd>/.claude/plans/archive/<slug>-<prior-date>-v<N>.md` before writing the new plan. Use today's date in the new filename if the prior version was written on a different day. NEVER overwrite an active plan in place — the archive preserves history for the user and for resumability. Stubs and smokes are not archived: reconcile them to the v2 plan (see Phase 2 Adjustments).
 
 Plan template:
 
@@ -278,19 +282,13 @@ Plan template:
 > Use the `godot-feature-implementer` agent with the plan at <plan path>.
 ```
 
-### Critical Godot rules to encode in the plan (MUST)
+### Godot pitfalls to encode in the plan (MUST)
 
-These apply to the test files and stubs you write and you MUST reflect them in the plan so the implementer follows them:
+`godot-gdscript-patterns` wins over training intuition, and its § Common Pitfalls is the canonical list (shadowed built-ins, `_ready` order, CanvasLayer overlays, `.tscn` UIDs, debug-grant guards, warning placement). The stubs and smokes you write follow it too. For each pitfall the touched code is exposed to, name it in the plan's `Implementation sequencing` or `Risks + mitigations` at the point it applies, so the implementer meets it where it matters.
 
-- **Skill is source of truth.** `godot-gdscript-patterns` wins over training intuition.
-- **Don't shadow GDScript built-ins** as locals: `seed`, `name` (on Node subclasses), `range`, `pi`, `tau`. Default-rename to `entry_seed`, `entry_name`, `attack_range`. Symptom is cryptic `Cannot find member "..." in base "Callable"` parse errors.
-- **`_ready` fires bottom-up.** Child `_ready` runs before parent `@onready` resolves. If a child's `_ready` calls into a parent method that derefs `@onready`, plan `call_deferred()` and add an inline comment naming the failure mode.
-- **CanvasLayer for overlays.** HUDs/modals/toasts in a scene that activates a `Camera2D` MUST root on `CanvasLayer` (or be wrapped in one) — layer-0 Controls drift with `canvas_transform`.
+Workflow-specific:
+
 - **New `class_name` → class-registry refresh** before the smoke can resolve the type; the runner does it when passed `new_class_name: true`. Stub `class_name`s are registered by the Step 10 red check, so Phase 3 only needs it for classes the implementer adds beyond the stubs.
-- **Don't hand-author `.tscn` UIDs** for new files. Godot regenerates on first scan; parent `ext_resource` references go stale.
-- **Debug grants need `if OS.is_debug_build():`** for any keyboard handler that mutates inventory / currency / XP / progression — guard so they never ship.
-- **Action-coupled warnings at the action site only**, not on review/inspection screens.
-- **`_check()` doesn't halt; `assert()` does.** New smokes use `_check()` so every test reports. In a legacy `assert()` smoke, order foundational asserts first — the first failure stops the file.
 
 ### Step 9 — Plan self-review (MUST)
 
@@ -356,10 +354,19 @@ User signals and your response:
 | Signal | Examples | Action |
 |--------|----------|--------|
 | Approval | "go", "implement this", "looks good", "ship it", points you at the plan with an action verb | Advance to Phase 3 without re-asking permission. |
-| Adjustments | "change X", "rethink Y" | Re-work the plan (re-run the relevant Phase 1 steps) OR hand-edit the plan in place, then re-checkpoint. |
-| Rejection | "no", "stop", "different approach" | STOP. You MUST NOT auto-pivot to a different design. Return to the user. |
+| Adjustments | "change X", "rethink Y" | Re-work the plan (re-run the relevant Phase 1 steps) OR hand-edit the plan in place, then re-checkpoint. If the interface surface changed, reconcile the stubs first: delete stubs nothing calls any more, update changed signatures, then re-run Steps 9-10. |
+| Rejection | "no", "stop", "different approach" | STOP. You MUST NOT auto-pivot to a different design. Run the rejection cleanup below, then return to the user. |
 
 Ambiguous signals (e.g. user just asks a question about the plan) → answer the question, do not advance.
+
+**Rejection cleanup (MUST).** Phase 1 left files in the tree, and stub `class_name`s are registered with Godot, so they can collide with a later design. List everything Phase 1 wrote — smokes, new stub files, stub methods appended to existing files, any harness copies — and ask via `AskUserQuestion` whether to remove them or keep them. Remove nothing without that answer. When removing:
+
+- Delete new smoke and stub files outright.
+- For stubs appended to existing files, remove only the appended stub methods. Never `git checkout` / `git restore` the file — it may hold the user's uncommitted work.
+- Keep harness copies (`smoke_harness.gd`, `run_smoke.sh`) unless the user says otherwise — they're shared infrastructure, not part of the rejected design.
+- Leave the plan file in place, and note `rejected` plus the date in its header so a later run doesn't mistake it for an active plan.
+
+Record the outcome in the progress block `Notes` and set `Current phase: stopped — plan rejected`.
 
 ## Phase 3 — Implementation (MUST when entry phase ≤ 3)
 
@@ -375,9 +382,10 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. It star
    })
    ```
 
-2. The implementer returns one of two statuses:
+2. The implementer returns one of three statuses:
    - `Status: smoke-ready` — it coded a pass; the handoff carries the smoke params (`smoke_scene`, `new_class_name`, and `log_path` for legacy log-file smokes only), any additional smokes, files changed, and deviations.
    - `Status: escalation` — a test-boundary / stale-assert / plan / scope concern. You MUST relay it verbatim and wait for user direction (see escalation rule below). Do NOT advance or auto-resolve.
+   - `Status: test-needed` — it found behavior the plan requires but no smoke covers, and stopped before coding it. Run [New tests after planning](#new-tests-after-planning-must) with its proposed assertions and interface, then re-dispatch it. A test-needed round doesn't count toward the step 5 iteration cap.
 
 3. On `smoke-ready`, run each reported smoke via `godot-smoke-runner` — one spawn per scene:
 
@@ -407,9 +415,19 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. It star
 
 5. Loop steps 3–4. Cap at ~5 code→smoke iterations. If the smoke still isn't green at the cap, STOP and escalate to the user with the latest failure rather than looping further. You MAY resume the loop once the user gives explicit guidance.
 
-You MUST NOT edit project source files directly during this phase — let the implementer own the diff. Your role in the loop is to run the runner and courier its JSON back, not to patch.
+You MUST NOT edit project source files directly during this phase — let the implementer own the diff. Your role in the loop is to run the runner and courier its JSON back, not to patch. The one exception is [New tests after planning](#new-tests-after-planning-must): new smokes plus signature-only stubs, never behavior.
 
 **Escalation rule.** When the implementer returns `Status: escalation` (a fixture-fragile test, a mis-framed assertion, a harness bug, a stale cross-feature assert, a plan/sequencing doubt), you MUST relay the concern verbatim and wait for user direction. You MUST NOT auto-resolve by inline-editing, by directing the implementer to patch a plan-authored test, or by inline-fixing a stale assert yourself.
+
+### New tests after planning (MUST)
+
+Every test must be seen failing before the code that makes it pass exists — the same rule Phase 1 Step 10 enforces. So after Phase 1, a new smoke is always written by you (never the implementer) and red-checked before the implementer codes against it. This applies to an implementer `test-needed` handoff and to a Phase 4 playtest bug alike.
+
+1. **Scope check.** If the behavior to pin is outside the approved plan's `Goal` and `Design decisions`, it's a scope change — ask the user via `AskUserQuestion` before writing anything.
+2. **Write the test.** Add `_test_*` cases to a new smoke under `tests/`, following Phase 1 Steps 6 and 8A. For a playtest bug, the test reproduces the user's case. Add signature-only stubs per Step 8B for any symbols that don't exist yet.
+3. **Red check** the new smoke per Phase 1 Step 10. A new test that passes on its first run was written after the code — the behavior already exists. Don't discard it: mark it `written after the code — never seen red` in the plan and surface that at the Phase 4 checkpoint.
+4. **Record it.** Hand-edit the plan's `Test specification` (and `Interface stubs`) — no archive needed for an addition. The new smoke is now read-only for the implementer like every other orchestrator-authored test.
+5. **Dispatch.** Re-dispatch the implementer with the plan path, naming the new smoke, then run the normal Phase 3 loop.
 
 ## Phase 4 — User verification checkpoint (MUST wait)
 
@@ -418,6 +436,7 @@ You MUST wait for the user to review the diff and / or playtest. Signals:
 | Signal | Action |
 |--------|--------|
 | Approval | Advance to Phase 5. |
+| Bug or wrong behavior found in playtest | Pin it first: run [New tests after planning](#new-tests-after-planning-must) so a failing smoke reproduces it, then fold back into Phase 3. Never send the implementer a bug without a red test. |
 | Tweaks | Default: fold back into Phase 3 (re-invoke implementer). MAY inline-edit ONLY if ALL of the following hold: (a) ≤3 lines changed, (b) typo / comment / whitespace only — no logic or string-literal change, (c) no new identifier (no new function, class_name, signal, or exported var), (d) no signal / scene / autoload / persistence / Resource-export touch. If any condition is unclear, re-invoke. |
 | Concerns about scope or correctness | STOP. Raise to user. |
 
@@ -479,7 +498,7 @@ Expected flow: Phase 0 classifies as task description → progress block written
 /godot-feature-workflow .claude/plans/wander-toggle-2026-05-06.md
 ```
 
-Expected flow: Phase 0 classifies as plan path → progress block records path, entry phase = 3 → skip Phase 1 → Phase 3 dispatches implementer.
+Expected flow: Phase 0 classifies as plan path → progress block records path → plan intake writes any missing stubs, self-reviews, and red-checks the smokes → clean and unchanged, so entry phase = 3 (after plan intake) → Phase 3 dispatches implementer.
 
 ### Example 3 — Resume after a session crash
 
@@ -515,6 +534,7 @@ These thoughts mean you're about to rationalize the SOP away:
 | "Only one approach makes sense here — skip the alternatives." | Step 3 always offers 2-3 credible approaches. If the docs dictate one, recommend it and show what it rules out — the user confirms. |
 | "The smokes obviously fail — no need to run them before handoff." | A smoke you never watched fail may parse-error or pass against the stubs. Step 10 is mandatory. |
 | "I'll fill in this stub while I'm here — it's one line." | Stubs carry signatures only. Behavior in Phase 1 means the smoke never proved it can fail. |
+| "The implementer can write the regression test along with the fix." | Then nobody watched it fail. New tests after planning come from you and are red-checked first. |
 | "Self-review is a formality — I just wrote this." | Step 9 catches the name drift and coverage gaps that otherwise surface as Phase 3 escalations. Run the checklist. |
 | "I'll just read the doc page myself to verify this API." | Phase 1 verification is delegated to Explore sub-agents — conclusions only, doc pages stay out of your context. Dispatch, don't read whole pages. |
 
@@ -529,7 +549,7 @@ If any of these thoughts appear, STOP, return to the user, and re-state the curr
 | Red check returns `compilation-error` for a stub `class_name` | Class registry not refreshed | Re-dispatch the runner with `new_class_name: true`. |
 | Red check keeps returning a planned test as passing | The assertion pins existing behavior or a stub default | Tighten the assertion to the missing behavior, or mark it a regression guard in the plan with a reason — don't put behavior in the stub. |
 | An Explore agent returns a huge doc dump | Prompt didn't cap the response | Re-dispatch with "report conclusions only — confirmed / contradicted / not-found + one-line doc reference, no excerpts". |
-| Smoke passes but user playtest disagrees | Smoke covers the wrong assertion | Have the implementer add a failing smoke test that captures the user's case (Phase 3 fold-back), then re-run the loop. |
+| Smoke passes but user playtest disagrees | Smoke covers the wrong assertion | Write a smoke that reproduces the user's case and red-check it ([New tests after planning](#new-tests-after-planning-must)), then fold back into Phase 3. |
 | `Skill → atomic-docs` reports drift in unrelated notes | Earlier work left stale references | Resolve those before committing — do not bypass the drift grep. |
 | `resume` cannot find a progress block | Block was scrubbed from context or never written | Ask the user which task to resume; do not infer from `git status`. |
 | Phase 1 ↔ Phase 3 ping-pong | Plan keeps changing under implementation | Stop. Raise to user — design is not converged; SOP is not the right tool for an exploratory phase. |

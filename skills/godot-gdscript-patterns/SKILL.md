@@ -199,7 +199,19 @@ Engine output is verbose. If your environment provides a smoke-runner sub-agent,
 - **Testing code that doesn't exist yet?** Write signature-only stubs first — `class_name`, typed method signatures, bodies of `pass` or the return type's zero value — so the smoke parses and fails on its checks. No behavior in a stub.
 - **Run the smoke before writing the code.** A test you never watched fail may be testing behavior that already exists.
 - One smoke scene per feature; name tests after the behaviour they pin (`rejects_when_full`, not `test3`).
-- Legacy smokes using `assert()` halt at the first failure; later tests in that file never run.
+- Legacy smokes using `assert()` halt at the first failure; later tests in that file never run — order foundational asserts first.
+
+## Common Pitfalls
+
+Engine and GDScript traps that produce cryptic errors or bugs that only show up later. Check new code against each one it touches.
+
+- **Don't shadow GDScript built-ins** as local variable names: `seed`, `name` (on Node subclasses), `range`, `pi`, `tau`. Use `entry_seed`, `entry_name`, `attack_range`, etc. Symptom: cryptic `Cannot find member "..." in base "Callable"` parse errors.
+- **`_ready` fires bottom-up.** A child's `_ready` runs before the parent's `@onready` vars resolve. If a child's `_ready` calls into a parent method that touches `@onready` state, use `call_deferred()`, with an inline comment naming the failure mode so a later refactor doesn't reintroduce it.
+- **CanvasLayer for overlays.** HUDs, modals, and toasts in a scene that activates a `Camera2D` must root on (or be wrapped in) a `CanvasLayer` — layer-0 Controls drift with `canvas_transform`.
+- **New `class_name` needs a class-registry refresh** before anything can resolve the type: an editor scan, or `godot --headless --import`. Until then: `Could not find type "X" in the current scope`.
+- **Don't hand-author `.tscn` UIDs** for new files. Omit `uid="..."` from the `[gd_scene]` header; Godot assigns one on first scan. If a parent scene must reference the new file via `ext_resource`, re-read the new `.tscn` after the scan for the real UID.
+- **Guard debug grants with `if OS.is_debug_build():`** — any keyboard handler that mutates inventory, currency, XP, or progression — so they never ship. `Engine.is_editor_hint()` is the wrong check: it's false at runtime even in `--debug` exports.
+- **Action-coupled warnings go at the action site only** (e.g. "this will overwrite your save" on the confirm button), not on review or inspection screens.
 
 ## Patterns
 
