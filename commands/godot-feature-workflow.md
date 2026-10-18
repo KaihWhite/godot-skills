@@ -9,7 +9,7 @@ argument-hint: <task ID or feature description> | <path to existing plan> | resu
 
 Orchestrate a test-first pipeline for non-trivial Godot 4 / GDScript features, systems, and refactors. Each phase ends at an explicit user checkpoint — no auto-chaining, no surprise commits.
 
-You (the main agent) do the planning yourself in Phase 1 — there is no separate planner sub-agent. This keeps the full planning context in your session, so asking the user a design question mid-plan is a normal inline `AskUserQuestion`, not a sub-agent restart that discards everything explored so far. To keep your context lean, you delegate the two heavy, mechanical jobs to sub-agents: Godot 4 doc verification (read-only `Explore`) and engine smokes (`godot-smoke-runner`). Implementation stays in a dedicated `godot-feature-implementer` sub-agent so the diff has a single owner.
+You (the main agent) do the planning yourself in Phase 1 — there is no separate planner sub-agent. This keeps the full planning context in your session, so asking the user a design question mid-plan is a normal inline `AskUserQuestion`, not a sub-agent restart that discards everything explored so far. To keep your context lean, you delegate the two heavy, mechanical jobs to sub-agents: Godot 4 doc verification (read-only `Explore`) and engine smokes (`godot-smoke-runner`). Implementation stays in a dedicated `godot-feature-implementer` sub-agent so the diff has a single owner, and a read-only `godot-feature-reviewer` gives the green result an independent read before the user sees it.
 
 The pipeline:
 
@@ -23,6 +23,7 @@ Phase 2:   (user reviews plan) ────────────────�
                                                  ↓
 Phase 3:   godot-feature-implementer (one code pass per dispatch) ─┐
            orchestrator runs godot-smoke-runner, loops failures back │
+           green → godot-feature-reviewer → one fix pass, re-smoke   │
                                                                      ├─→ user verification checkpoint
 Phase 4:   (user verifies)                                         ─┘
                                        ↓
@@ -81,6 +82,7 @@ You MUST perform these steps in order before doing any planning:
    - Inquiry rounds: <count, default 0>
    - Doc verification: <verified via Explore (N claims) | n/a — no engine API surface>
    - Red check: <clean — N/N tests CHECK FAILED | pending>
+   - Review: <pending | clean | N fixed, M declined, K open | stopped — test-integrity>
    - Last checkpoint: <ISO date or "—">
    - Notes: <free-form, e.g. "user requested edge case X">
    ```
@@ -268,6 +270,7 @@ Plan template:
 - Edge cases (user-confirmed):
   - <edge> — covered by `_test_<Y>()`
 - Red check: <date> — <N/N tests CHECK FAILED; runner summary>
+  - sha256: `<smoke path>` = `<hash>` (one line per smoke `.gd` and `.tscn`)
 
 ## Implementation sequencing
 <order; deferrals via call_deferred or signals; new class_name → runner needs new_class_name: true>
@@ -331,6 +334,8 @@ Act on anything else — you own the plan-authored tests and stubs in this phase
 | `pass` | Nothing is red | The tests don't exercise the feature. Return to Step 6 |
 
 Cap at ~3 red-check iterations. If it still isn't a clean red, STOP and raise it to the user with the latest runner JSON. Record the result in the plan's `Red check` line and set `Red check:` in the progress block.
+
+Once the red is clean, record a SHA-256 of every smoke `.gd` and `.tscn` under the `Red check` line (`shasum -a 256 <file>`, or `sha256sum`). The Phase 3 reviewer compares against these to confirm the implementer left the tests alone. If you later change a smoke (Phase 2 adjustments, plan intake), re-run the red check and re-record.
 
 ### Step 11 — Hand off to the user (MUST)
 
@@ -400,7 +405,7 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. It star
    You MUST NOT run the engine yourself (`mcp__godot__run_project` / `get_debug_output` / `stop_project`, or `tools/run_smoke.sh`) — the runner absorbs the verbose engine output so your context stays lean across iterations. The runner returns a JSON block with `status` (`pass` / `fail` / `compilation-error`), a `failures` list, and a 1-line `summary`.
 
 4. Act on the runner's result:
-   - `pass` (all reported smokes green) → surface the implementer's report + the green smoke summaries verbatim, update the progress block (`Last checkpoint: <date>`), advance to Phase 4.
+   - `pass` (all reported smokes green) → go to step 6 (review).
    - `fail` / `compilation-error` → re-dispatch the implementer with the JSON embedded so it classifies and fixes:
 
      ```
@@ -415,6 +420,39 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. It star
 
 5. Loop steps 3–4. Cap at ~5 code→smoke iterations. If the smoke still isn't green at the cap, STOP and escalate to the user with the latest failure rather than looping further. You MAY resume the loop once the user gives explicit guidance.
 
+6. **Review (MUST once green).** Dispatch the reviewer with the plan path and the changed-file list — the union of every implementer pass's `Changed this pass`, plus the plan's stubs and smokes:
+
+   ```
+   Agent({
+     description: "Review <plan slug>",
+     subagent_type: "godot-feature-reviewer",
+     prompt: "Review the implementation of the plan at <plan path>. Changed files:\n<list>"
+   })
+   ```
+
+   Route its verdict:
+
+   - `clean` → go to the Phase 4 handoff below.
+   - `stop` (a smoke's hash no longer matches its red-check record) → relay the finding verbatim and wait for the user. Don't re-dispatch anyone.
+   - `changes-requested` →
+     - `coverage` findings → run [New tests after planning](#new-tests-after-planning-must) for each (its scope check applies). Never send these to the implementer.
+     - `must-fix` and `should-fix` findings → re-dispatch the implementer for one review-fix pass with the findings embedded:
+
+       ```
+       Agent({
+         description: "Review fixes <plan slug>",
+         subagent_type: "godot-feature-implementer",
+         prompt: "Continue the plan at <plan path>. Review-fix pass — address these findings per your review-fix rules:\n<findings>"
+       })
+       ```
+
+     - Then re-run the smokes (steps 3–4; a failure there is an ordinary fix loop). When they're green, return here instead of starting a fresh review: re-review only if there were `must-fix` findings, passing the prior findings and the implementer's per-finding response; otherwise go to the Phase 4 handoff. At most 2 review rounds in total.
+     - Anything still open after the cap, any finding the implementer declined, and all `note`s go into the Phase 4 report. Don't loop to settle a disagreement — the user arbitrates.
+
+   **Phase 4 handoff.** Surface the implementer's report, the green smoke summaries, and the review outcome (fixed / declined with reasons / open / notes) verbatim, set `Review:` and `Last checkpoint: <date>` in the progress block, and advance to Phase 4.
+
+   A Phase 4 fold-back that ends green runs this step again, scoped to the files that fold-back changed.
+
 You MUST NOT edit project source files directly during this phase — let the implementer own the diff. Your role in the loop is to run the runner and courier its JSON back, not to patch. The one exception is [New tests after planning](#new-tests-after-planning-must): new smokes plus signature-only stubs, never behavior.
 
 **Escalation rule.** When the implementer returns `Status: escalation` (a fixture-fragile test, a mis-framed assertion, a harness bug, a stale cross-feature assert, a plan/sequencing doubt), you MUST relay the concern verbatim and wait for user direction. You MUST NOT auto-resolve by inline-editing, by directing the implementer to patch a plan-authored test, or by inline-fixing a stale assert yourself.
@@ -426,7 +464,7 @@ Every test must be seen failing before the code that makes it pass exists — th
 1. **Scope check.** If the behavior to pin is outside the approved plan's `Goal` and `Design decisions`, it's a scope change — ask the user via `AskUserQuestion` before writing anything.
 2. **Write the test.** Add `_test_*` cases to a new smoke under `tests/`, following Phase 1 Steps 6 and 8A. For a playtest bug, the test reproduces the user's case. Add signature-only stubs per Step 8B for any symbols that don't exist yet.
 3. **Red check** the new smoke per Phase 1 Step 10. A new test that passes on its first run was written after the code — the behavior already exists. Don't discard it: mark it `written after the code — never seen red` in the plan and surface that at the Phase 4 checkpoint.
-4. **Record it.** Hand-edit the plan's `Test specification` (and `Interface stubs`) — no archive needed for an addition. The new smoke is now read-only for the implementer like every other orchestrator-authored test.
+4. **Record it.** Hand-edit the plan's `Test specification` (and `Interface stubs`), including the new smoke's sha256 lines — no archive needed for an addition. The new smoke is now read-only for the implementer like every other orchestrator-authored test.
 5. **Dispatch.** Re-dispatch the implementer with the plan path, naming the new smoke, then run the normal Phase 3 loop.
 
 ## Phase 4 — User verification checkpoint (MUST wait)
@@ -490,7 +528,7 @@ When `$ARGUMENTS == "resume"`:
 /godot-feature-workflow TASK-F62 raid multipliers
 ```
 
-Expected flow: Phase 0 classifies as task description → progress block written → Phase 1: you orient, consult the patterns skill, write back your understanding and offer 2-3 approaches (Round 1), ask design + edge questions for the chosen approach (Round 2), dispatch Explore sub-agents to verify the API claims, write the plan + interface stubs + failing smokes, self-review, confirm red via `godot-smoke-runner` → Phase 2 checkpoint → user approves → Phase 3 dispatches implementer → checkpoint → user verifies → Phase 5 atomic-docs.
+Expected flow: Phase 0 classifies as task description → progress block written → Phase 1: you orient, consult the patterns skill, write back your understanding and offer 2-3 approaches (Round 1), ask design + edge questions for the chosen approach (Round 2), dispatch Explore sub-agents to verify the API claims, write the plan + interface stubs + failing smokes, self-review, confirm red via `godot-smoke-runner` → Phase 2 checkpoint → user approves → Phase 3 dispatches implementer, loops smokes to green, runs the reviewer and one fix pass → checkpoint → user verifies → Phase 5 atomic-docs.
 
 ### Example 2 — Plan already exists
 
@@ -535,6 +573,8 @@ These thoughts mean you're about to rationalize the SOP away:
 | "The smokes obviously fail — no need to run them before handoff." | A smoke you never watched fail may parse-error or pass against the stubs. Step 10 is mandatory. |
 | "I'll fill in this stub while I'm here — it's one line." | Stubs carry signatures only. Behavior in Phase 1 means the smoke never proved it can fail. |
 | "The implementer can write the regression test along with the fix." | Then nobody watched it fail. New tests after planning come from you and are red-checked first. |
+| "Smokes are green — the review is a formality." | Smokes prove the assertions, not the design, the pitfalls, or the tests' integrity. Step 6 runs every time Phase 3 goes green. |
+| "I'll keep re-dispatching until the reviewer and implementer agree." | Two review rounds, then the disagreement goes to the user at Phase 4. |
 | "Self-review is a formality — I just wrote this." | Step 9 catches the name drift and coverage gaps that otherwise surface as Phase 3 escalations. Run the checklist. |
 | "I'll just read the doc page myself to verify this API." | Phase 1 verification is delegated to Explore sub-agents — conclusions only, doc pages stay out of your context. Dispatch, don't read whole pages. |
 
@@ -552,6 +592,8 @@ If any of these thoughts appear, STOP, return to the user, and re-state the curr
 | Smoke passes but user playtest disagrees | Smoke covers the wrong assertion | Write a smoke that reproduces the user's case and red-check it ([New tests after planning](#new-tests-after-planning-must)), then fold back into Phase 3. |
 | `Skill → atomic-docs` reports drift in unrelated notes | Earlier work left stale references | Resolve those before committing — do not bypass the drift grep. |
 | `resume` cannot find a progress block | Block was scrubbed from context or never written | Ask the user which task to resume; do not infer from `git status`. |
+| Reviewer returns `stop` on a hash mismatch | A smoke changed after its red check — the implementer edited it, or you changed it without re-recording | Relay to the user. If the change was yours (a Phase 2 adjustment), re-run the red check and re-record the hashes, then re-review. |
+| Reviewer `should-fix` findings change behavior when applied | Finding mis-classified, or the fix overreached | Smokes catch it as a failure; if the fix needs new behavior, it was a `must-fix` or a coverage gap — route it accordingly. |
 | Phase 1 ↔ Phase 3 ping-pong | Plan keeps changing under implementation | Stop. Raise to user — design is not converged; SOP is not the right tool for an exploratory phase. |
 | User says "go" mid-Phase 1 (before the plan is written) | Premature approval | Acknowledge but do not advance; the plan file doesn't exist yet. |
 

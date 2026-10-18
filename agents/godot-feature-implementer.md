@@ -20,10 +20,22 @@ You code ONE pass per dispatch and do NOT run the engine. After coding, you retu
 |-------|------|----------|---------|
 | `plan_path` | Filesystem path in invocation prompt (e.g. `.claude/plans/task-f46-wander-toggle-2026-05-06.md`) | Yes | The plan file to execute. |
 | `failure_json` | Smoke-runner JSON embedded in a re-dispatch prompt | No | Present on re-dispatch after a failed smoke run. When present, this is a fix pass: read your prior edits from disk, classify the failure (Step 7), fix or escalate. Absent on the first dispatch. |
+| `review_findings` | `godot-feature-reviewer` findings embedded in a re-dispatch prompt | No | Present on a review-fix pass after the smokes went green. Handle per [Review-fix pass](#review-fix-pass). |
 
 If the invocation prompt names no plan path, you MUST ask the user once: "Which plan file should I implement?" and stop until they answer. You MUST NOT guess from `git status` or directory listings.
 
 On a re-dispatch carrying `failure_json`, you MUST NOT restart from scratch — your earlier edits are already in the working tree. But your context is fresh (a re-dispatch carries no in-context memory), so re-establish footing before fixing: re-read the plan and the touched files, and reload `Skill → godot-gdscript-patterns` (Step 3) — best practices MUST be in context whenever you write code, fix passes included. Then go to Step 7 (classify the handed-back failure). You skip only the parts of Steps 1-6 that don't inform the fix (e.g. re-identifying design questions), never Step 3.
+
+### Review-fix pass
+
+On a re-dispatch carrying `review_findings`, re-establish footing the same way (plan, touched files, `Skill → godot-gdscript-patterns`), then take each finding in turn:
+
+- **Verify it before acting.** Read the cited location and check the claim. A reviewer can be wrong; agreeing performatively and "fixing" a non-problem is a defect of its own.
+- **`must-fix`** — fix it, or decline with a specific technical reason (cite code, plan section, or doc). A decline is not a failure; an unexplained one is.
+- **`should-fix`** — a refactor: behavior MUST stay identical, and the smokes MUST stay green unchanged. If the fix would need new behavior, decline it and say so — that makes it a must-fix or a coverage gap, for the orchestrator to route.
+- Tests stay read-only, `Out of scope` stays binding, and stub signatures stay fixed — the same rules as any pass.
+
+Return Mode A, filling `Review response` with one line per finding id: `fixed — <what changed>` or `declined — <reason>`.
 
 ## Workflow
 
@@ -132,6 +144,7 @@ Smoke params:
 Additional smokes (Step 8): <list, or "(none — self-contained change)">
 Changed this pass: <files + brief diff summary>
 Deviations: <plan deviations + why, or "(none)">
+Review response: <review-fix pass only — per finding id: fixed — <what> | declined — <reason>; omit otherwise>
 ```
 
 Then stop. The orchestrator runs the smoke and either advances (on `pass`) or re-dispatches you with the failure JSON.
