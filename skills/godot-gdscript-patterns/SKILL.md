@@ -182,14 +182,16 @@ func _test_frame() -> void:
 
 ### Running
 
-**Godot MCP available** (`mcp__godot__*` tools) → use it:
+**Prefer `sh tools/run_smoke.sh smoke_<feature>`** whenever the project has it (set `GODOT` if the binary isn't on `PATH`). It runs an import pass first (so new `class_name`s resolve), kills the run early on a parse error, enforces a `SMOKE_TIMEOUT` watchdog, and returns the complete output with an exit-code verdict.
 
-1. Only if the test depends on a `class_name` written since the last editor scan: `mcp__godot__launch_editor`, wait ~5–10 s, so the class registry rebuilds.
+**Godot MCP only as a fallback** (no `run_smoke.sh`):
+
+1. Only if the test depends on a `class_name` written since the last editor scan: `mcp__godot__launch_editor`, wait ~5–10 s, so the class registry rebuilds. The editor stays open afterwards.
 2. `mcp__godot__run_project` with the scene, then `mcp__godot__get_debug_output`, then `mcp__godot__stop_project`.
 
-**No MCP** → `sh tools/run_smoke.sh smoke_<feature>` (set `GODOT` if the binary isn't on `PATH`). It runs an import pass first (so new `class_name`s resolve), kills the run early on a parse error, and enforces a `SMOKE_TIMEOUT` watchdog.
+MCP has two traps for smokes. A smoke that quits quickly can exit before `get_debug_output` reads anything, and the output is lost. A runtime error triggers a debugger break that halts the run, so later tests never execute.
 
-**Pass** = `result=PASS` in the output, no `SCRIPT ERROR` / `Parse Error`, and (script) exit code 0. A runtime error aborts its `_test_*` without failing a check, so `result=PASS` alone isn't enough.
+**Pass** = `result=PASS` in the output, no `SCRIPT ERROR` / `Parse Error`, and (script) exit code 0. A runtime error aborts its `_test_*` without failing a check — headless, the harness even prints `<label> OK` for the crashed test — so `result=PASS` alone isn't enough. Attribute a `SCRIPT ERROR` to its test by the backtrace.
 
 Engine output is verbose. If your environment provides a smoke-runner sub-agent, have it run the smoke and return only the failures.
 

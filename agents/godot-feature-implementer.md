@@ -93,6 +93,7 @@ You do NOT run the engine. You MUST NOT call `mcp__godot__run_project` / `get_de
 
 - `smoke_scene`: `res://tests/smoke_<feature>.tscn`.
 - `log_path`: only for legacy smokes that write their own log file — check the smoke for a `FileAccess.open` target (typically `<userdata>/<project>/smoke_<feature>.log`). Omit it for `SmokeHarness` smokes, which print to stdout.
+- `script_args`: the plan's `Run with` value for this smoke (e.g. `--gpu`), when it has one. Omit otherwise.
 - `new_class_name`: `true` if you just wrote a new `class_name X` script the smoke depends on (the runner rebuilds the class registry — editor refresh via MCP, or the import pass in `tools/run_smoke.sh`). `false`/omit otherwise — including when you only filled in a stub, whose `class_name` the planning phase's red check already registered.
 
 The runner only handles smoke scenes (ones that call `get_tree().quit()` and print a verdict — see `godot-gdscript-patterns` § Testing GDScript); a raw gameplay scene won't terminate or produce parseable output.
@@ -141,6 +142,7 @@ Smoke params:
   - smoke_scene: res://tests/smoke_<feature>.tscn
   - log_path: <absolute path — legacy log-file smokes only; omit otherwise>
   - new_class_name: <true | false>
+  - script_args: <e.g. --gpu — omit when none>
 Additional smokes (Step 8): <list, or "(none — self-contained change)">
 Changed this pass: <files + brief diff summary>
 Deviations: <plan deviations + why, or "(none)">

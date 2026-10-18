@@ -209,6 +209,7 @@ You MUST create:
 - `tests/smoke_<feature>.tscn` — root Node with the script attached, no hand-authored `uid`.
 - `tests/smoke_<feature>.gd` — `SmokeHarness` subclass with `_test_*` functions. Tests MUST fail until Phase 3 codes the feature — red means `CHECK FAILED` lines, not a parse error. That is the TDD red state, and Step 10 proves it.
 - **Project has no harness yet** → also copy the skill's `assets/smoke_harness.gd` to `scripts/tests/helpers/` and `assets/run_smoke.sh` to `tools/`.
+- **Project has a harness but no `tools/run_smoke.sh`** → copy the skill's `assets/run_smoke.sh` to `tools/` anyway. Without it the runner falls back to the Godot MCP, which loses the output of any smoke that quits quickly — including every passing one — so Phase 3 could never confirm green.
 
 #### B. Interface stubs
 
@@ -265,6 +266,7 @@ Plan template:
 
 ## Test specification
 - Smoke harness: `tests/smoke_<feature>.tscn` + `.gd` (failing versions already written)
+- Run with: `<script_args, e.g. --gpu — or "(none)">`
 - Test cases:
   - `_test_<X>()` — checks <end state> — fails today because <missing behavior>
 - Edge cases (user-confirmed):
@@ -309,28 +311,31 @@ Fix issues inline — no need to re-review afterwards. If a fix changes a user-c
 
 You MUST watch the smokes fail before handing off. A smoke that was never run hasn't been shown to test anything: it might parse-error, or pass against the stubs because it pins behavior that already exists.
 
-Dispatch one `godot-smoke-runner` per smoke scene. Pass `new_class_name: true` if the stubs added any `class_name`:
+Dispatch one `godot-smoke-runner` per smoke scene. Pass `new_class_name: true` if the stubs added any `class_name`, and `Script args` when the project's `tools/run_smoke.sh` needs them for this smoke (e.g. `--gpu` for a RenderingDevice suite — check CLAUDE.md and the script's usage header). Record the args in the plan's `Test specification` so Phase 3 runs the smoke the same way:
 
 ```
 Agent({
   description: "Red check <smoke slug>",
   subagent_type: "godot-smoke-runner",
-  prompt: "Run <smoke_scene>. new_class_name: <true|false>. This is a pre-implementation red check — failures are expected."
+  prompt: "Run <smoke_scene>. new_class_name: <true|false>.[ Script args: <args>] This is a pre-implementation red check — failures are expected."
 })
 ```
 
 The red check passes only when the runner returns `status: fail` and:
 
-- every failure is `type: assertion` (`CHECK FAILED`) — no `compilation-error`, no `runtime-error`; and
-- every test case in the plan's `Test specification` appears among the failures, except ones the plan explicitly marks as regression guards.
+- every failure is `type: assertion` (`CHECK FAILED`) — no `compilation-error`, no `runtime-error`;
+- `not_run` is empty — every test actually ran; and
+- every test case in the plan's `Test specification` is among the failures, except ones the plan explicitly marks as regression guards (which may appear in `passed`).
 
 Act on anything else — you own the plan-authored tests and stubs in this phase, so fix them yourself:
 
 | Runner result | Meaning | Action |
 |---------------|---------|--------|
 | `compilation-error` | A smoke or stub doesn't parse, or a stub symbol is missing | Fix the smoke / stub (and re-run Step 9 check 3), re-dispatch |
-| `runtime-error` | A stub default (e.g. `null`) crashes the test before it reaches `_check` | Restructure the test to `_check` the precondition first (e.g. `_check(x != null, ...)` then return) — never put behavior in the stub |
-| A planned test missing from `failures` | It passes against the stubs — it pins behavior that already exists or a stub default happens to satisfy it | Tighten the assertion so it fails for the missing behavior, or mark it a regression guard in the plan with a reason |
+| `runtime-error` | A stub default (e.g. `null`) crashes the test before it reaches `_check` | Restructure the test to `_check` the precondition first (`if not _check(x != null, "..."): return`) — never put behavior in the stub |
+| `not_run` non-empty | The run halted (a crash, or a timeout) before reaching those tests | Their absence from `failures` proves nothing. Fix the cause — usually the `runtime-error` row above — and re-dispatch before judging anything else |
+| A planned test in `passed` | It passes against the stubs — it pins behavior that already exists or a stub default happens to satisfy it (e.g. a stub's `return 0` matching "starts at zero") | Tighten the assertion so it fails for the missing behavior, or mark it a regression guard in the plan with a reason |
+| `error` | The runner couldn't get a verdict (no way to run Godot, or output lost) | Infrastructure, not the tests. Raise it to the user with the runner's summary; don't edit tests or stubs over it |
 | `pass` | Nothing is red | The tests don't exercise the feature. Return to Step 6 |
 
 Cap at ~3 red-check iterations. If it still isn't a clean red, STOP and raise it to the user with the latest runner JSON. Record the result in the plan's `Red check` line and set `Red check:` in the progress block.
@@ -398,11 +403,11 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. It star
    Agent({
      description: "Run <smoke slug>",
      subagent_type: "godot-smoke-runner",
-     prompt: "Run <smoke_scene>. new_class_name: <true|false>.[ Log: <log_path> — legacy log-file smokes only]"
+     prompt: "Run <smoke_scene>. new_class_name: <true|false>.[ Script args: <args>][ Log: <log_path> — legacy log-file smokes only]"
    })
    ```
 
-   You MUST NOT run the engine yourself (`mcp__godot__run_project` / `get_debug_output` / `stop_project`, or `tools/run_smoke.sh`) — the runner absorbs the verbose engine output so your context stays lean across iterations. The runner returns a JSON block with `status` (`pass` / `fail` / `compilation-error`), a `failures` list, and a 1-line `summary`.
+   You MUST NOT run the engine yourself (`mcp__godot__run_project` / `get_debug_output` / `stop_project`, or `tools/run_smoke.sh`) — the runner absorbs the verbose engine output so your context stays lean across iterations. The runner returns a JSON block with `status` (`pass` / `fail` / `compilation-error` / `error`), a `failures` list, `passed` and `not_run` label lists, and a 1-line `summary`.
 
 4. Act on the runner's result:
    - `pass` (all reported smokes green) → go to step 6 (review).
@@ -417,6 +422,7 @@ The implementer codes ONE pass per dispatch and does NOT run the engine. It star
      ```
 
      If the failure is `compilation-error: Could not find type "X"` for a `class_name` the implementer just wrote, set `new_class_name: true` on the next runner spawn.
+   - `error` → the runner couldn't get a verdict (no way to run Godot, output lost). That's infrastructure, not code: STOP and raise it to the user. Don't send it to the implementer.
 
 5. Loop steps 3–4. Cap at ~5 code→smoke iterations. If the smoke still isn't green at the cap, STOP and escalate to the user with the latest failure rather than looping further. You MAY resume the loop once the user gives explicit guidance.
 
